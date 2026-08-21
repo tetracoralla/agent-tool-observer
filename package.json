@@ -1,0 +1,20 @@
+{
+  "name": "@openadam/agent-tool-observer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local-only passive observation of Agent tool usage across supported clients.",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "agent-tool-observer": "src/cli.mjs"
+  },
+  "scripts": {
+    "test": "node --no-warnings --test test/*.test.mjs",
+    "check:contracts": "node --no-warnings scripts/check-contracts.mjs",
+    "smoke": "node --no-warnings scripts/smoke.mjs",
+    "check": "npm test && npm run check:contracts && npm run smoke"
+  }
+}

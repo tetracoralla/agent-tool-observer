@@ -1,0 +1,76 @@
+import os from "node:os";
+import path from "node:path";
+import { ObserverError } from "./errors.mjs";
+
+const DEFAULT_STATE_DIR_PARTS = [
+  "Library",
+  "Application Support",
+  "OpenAdam",
+  "Agent Tool Observer"
+];
+
+export const DEFAULT_LIMITS = Object.freeze({
+  lookbackDays: 30,
+  maxFilesPerProvider: 2_000,
+  maxBytesPerSource: 8 * 1024 * 1024,
+  maxBytesPerRun: 128 * 1024 * 1024,
+  maxLinesPerRun: 250_000,
+  maxLineBytes: 2 * 1024 * 1024,
+  maxJsonDepth: 64,
+  maxWallTimeMs: 90_000,
+  leaseMs: 15 * 60_000
+});
+
+function integerSetting(value, fallback, minimum, maximum, name) {
+  if (value === undefined || value === "") return fallback;
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < minimum || parsed > maximum) {
+    throw new ObserverError("CONFIG_INVALID", `${name} must be an integer from ${minimum} to ${maximum}`);
+  }
+  return parsed;
+}
+
+function pathList(value, fallback) {
+  if (!value) return fallback;
+  return value.split(path.delimiter).map((item) => item.trim()).filter(Boolean).map((item) => path.resolve(item));
+}
+
+export function resolveConfig(environment = process.env, homeDirectory = os.homedir()) {
+  const stateDir = path.resolve(
+    environment.ATO_STATE_DIR || path.join(homeDirectory, ...DEFAULT_STATE_DIR_PARTS)
+  );
+  const limits = {
+    lookbackDays: integerSetting(environment.ATO_LOOKBACK_DAYS, DEFAULT_LIMITS.lookbackDays, 1, 3650, "ATO_LOOKBACK_DAYS"),
+    maxFilesPerProvider: integerSetting(environment.ATO_MAX_FILES, DEFAULT_LIMITS.maxFilesPerProvider, 1, 100_000, "ATO_MAX_FILES"),
+    maxBytesPerSource: integerSetting(environment.ATO_MAX_SOURCE_BYTES, DEFAULT_LIMITS.maxBytesPerSource, 4096, 128 * 1024 * 1024, "ATO_MAX_SOURCE_BYTES"),
+    maxBytesPerRun: integerSetting(environment.ATO_MAX_RUN_BYTES, DEFAULT_LIMITS.maxBytesPerRun, 4096, 2 * 1024 * 1024 * 1024, "ATO_MAX_RUN_BYTES"),
+    maxLinesPerRun: integerSetting(environment.ATO_MAX_LINES, DEFAULT_LIMITS.maxLinesPerRun, 4, 5_000_000, "ATO_MAX_LINES"),
+    maxLineBytes: integerSetting(environment.ATO_MAX_LINE_BYTES, DEFAULT_LIMITS.maxLineBytes, 1024, 32 * 1024 * 1024, "ATO_MAX_LINE_BYTES"),
+    maxJsonDepth: integerSetting(environment.ATO_MAX_JSON_DEPTH, DEFAULT_LIMITS.maxJsonDepth, 4, 512, "ATO_MAX_JSON_DEPTH"),
+    maxWallTimeMs: integerSetting(environment.ATO_MAX_WALL_MS, DEFAULT_LIMITS.maxWallTimeMs, 1000, 30 * 60_000, "ATO_MAX_WALL_MS"),
+    leaseMs: integerSetting(environment.ATO_LEASE_MS, DEFAULT_LIMITS.leaseMs, 10_000, 60 * 60_000, "ATO_LEASE_MS")
+  };
+  const disabledProviders = new Set(
+    String(environment.ATO_DISABLE_PROVIDERS || "")
+      .split(",")
+      .map((item) => item.trim().toLowerCase())
+      .filter(Boolean)
+  );
+  return Object.freeze({
+    stateDir,
+    databasePath: path.join(stateDir, "observer.sqlite3"),
+    logsDir: path.join(stateDir, "logs"),
+    codexRoots: pathList(environment.ATO_CODEX_ROOTS, [
+      path.join(homeDirectory, ".codex", "sessions"),
+      path.join(homeDirectory, ".codex", "archived_sessions")
+    ]),
+    claudeRoots: pathList(environment.ATO_CLAUDE_ROOTS, [
+      path.join(homeDirectory, ".claude", "projects")
+    ]),
+    zcodeDatabasePath: path.resolve(
+      environment.ATO_ZCODE_DB || path.join(homeDirectory, ".zcode", "cli", "db", "db.sqlite")
+    ),
+    disabledProviders,
+    limits
+  });
+}
