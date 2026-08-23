@@ -12,6 +12,13 @@
    argument, input-content, result, output-content, or error-message fields.
 5. All source/session/turn/call/message identifiers are context-hashed before
    insertion. Unknown strings from records are not copied into health errors.
+6. Explicit Procedure Receipt files are bounded regular non-symlinked files.
+   Receipt invocation IDs are hashed; input/output payloads and digests are not
+   persisted. Only versioned semantic IDs, bindings, runtime state, duration,
+   effects, and stable error codes may enter semantic event tables.
+7. v0.2 checkpoint criteria and evidence digests are validated and discarded.
+   Stored checkpoint metadata may say only that human authority was declared;
+   reviewer authentication remains a host responsibility.
 
 ## Bounds
 
@@ -41,6 +48,13 @@
    error rate. The report exposes the counts supporting the signal.
 5. Passive output can request a targeted `agent-tool-evals` comparison but
    cannot run one automatically.
+6. Repeated unmapped MCP use and repeated tool sequences may only nominate a
+   Capability-contract or Procedure evaluation. Both keep correctness unknown.
+7. Passive Capability call counts may be mapped only from an explicit receipt
+   binding target. This establishes a declared name association, not provider
+   conformance, task opportunity, or correctness.
+8. Human checkpoint acceptance and rejection remain authority decisions, not
+   objective quality scores. Reports must keep correctness evidence unknown.
 
 ## Automatic installation
 

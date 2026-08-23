@@ -17,6 +17,7 @@ telemetry role and no hosted service.
 Codex persisted events  --- read-only adapter --\
 Claude persisted events --- read-only adapter ---- local projection -> report
 ZCode usage database    --- read-only adapter --/
+Procedure receipt file  --- explicit validator -/
                                                     |
                                                     +-> targeted candidate only
                                                         agent-tool-evals
@@ -35,6 +36,10 @@ The observer never:
 - treats zero observed calls as zero opportunity;
 - treats completion as correctness;
 - automatically weakens routing or retires a tool.
+
+An explicit Procedure-receipt import is the only semantic ingestion path in
+v0.1. It validates and projects a bounded receipt file supplied by the owner or
+an in-scope implementation. It does not scan arbitrary output directories.
 
 ## Automatic flow
 
@@ -91,6 +96,26 @@ identifiers are never stored in checkpoint form. The adapter treats the usage
 tables as append-only event stores; terminal-state changes are read from their
 completion timestamps.
 
+Procedure observations retain hashed invocation identity, versioned Procedure
+and implementation IDs, runtime outcome and timing, and stable error code.
+Capability-stage observations retain versioned Capability, operation, and
+provider IDs; binding transport and target; runtime status, duration, effects,
+and stable error code. Receipt input/output digests are validated but not
+stored.
+
+Human-checkpoint observations retain only Procedure identity, checkpoint stage
+ID, declared human authority, pending/accepted/rejected/skipped state, timing,
+and whether a human decision source was declared. Criteria digests, evidence
+digests, reviewer identity, and review content are not stored. The observer
+reports `declared-human-source` and `host-required` authentication; it never
+turns a human decision into correctness evidence.
+
+When a receipt declares an MCP binding target, the report may map matching
+passive MCP names to that Capability and count `passiveObservedCalls`. The
+mapping basis is recorded as `declared-receipt-binding-target`; it is usage
+evidence only and does not turn passive completion into conformance or
+correctness evidence.
+
 ## Report semantics
 
 The report emits these signals:
@@ -105,6 +130,16 @@ passive metadata alone. A future opportunity classifier must first distinguish
 tool availability, genuine opportunity, forced routing, natural routing, and
 semantically comparable alternatives. Until then, the report recommends a
 targeted controlled evaluation rather than a portfolio mutation.
+
+Two discovery signals are deliberately weaker than recommendations:
+
+- repeated MCP calls with no observed semantic binding become
+  `candidate-for-capability-contract`;
+- an identical 2–8 tool sequence repeated in at least three turns across at
+  least two hashed sessions becomes `candidate-for-procedure-evaluation`.
+
+Both retain `correctnessEvidence: unknown`. They nominate definition and
+conformance work; they do not assert the observed sequence is the right method.
 
 ## Provider status
 

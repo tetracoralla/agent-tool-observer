@@ -7,6 +7,7 @@ import { openReadOnlyStateDatabase, openStateDatabase } from "./db.mjs";
 import { ObserverError } from "./errors.mjs";
 import { installLaunchAgent, uninstallLaunchAgent } from "./installer.mjs";
 import { buildReport, renderReport } from "./report.mjs";
+import { ingestProcedureReceipts } from "./semantic-receipts.mjs";
 import { readSnapshot, writeSnapshot } from "./snapshot.mjs";
 import { buildStatus, renderStatus } from "./status.mjs";
 
@@ -17,6 +18,7 @@ function usage() {
   agent-tool-observer collect [--json|--quiet]
   agent-tool-observer status [--json]
   agent-tool-observer report [--days N] [--openadam] [--json]
+  agent-tool-observer ingest-receipts --file FILE [--json]
   agent-tool-observer install [--dry-run] [--json]
   agent-tool-observer uninstall [--json]
 `;
@@ -25,7 +27,15 @@ function usage() {
 function parseArguments(argumentsList) {
   const command = argumentsList[0];
   if (!command || ["help", "--help", "-h"].includes(command)) return { command: "help" };
-  const options = { command, json: false, quiet: false, dryRun: false, openAdamOnly: false, days: 30 };
+  const options = {
+    command,
+    json: false,
+    quiet: false,
+    dryRun: false,
+    openAdamOnly: false,
+    days: 30,
+    file: null
+  };
   for (let index = 1; index < argumentsList.length; index += 1) {
     const argument = argumentsList[index];
     if (argument === "--json") options.json = true;
@@ -38,6 +48,10 @@ function parseArguments(argumentsList) {
         throw new ObserverError("ARGUMENT_INVALID", "--days must be an integer from 1 to 3650");
       }
       options.days = value;
+    } else if (argument === "--file") {
+      const value = argumentsList[++index];
+      if (!value) throw new ObserverError("ARGUMENT_INVALID", "--file requires a path");
+      options.file = path.resolve(value);
     } else {
       throw new ObserverError("ARGUMENT_UNKNOWN", `Unknown argument: ${argument}`);
     }
@@ -47,6 +61,12 @@ function parseArguments(argumentsList) {
   }
   if (options.quiet && options.command !== "collect") {
     throw new ObserverError("ARGUMENT_INVALID", "--quiet is supported only by collect");
+  }
+  if (options.command === "ingest-receipts" && options.file === null) {
+    throw new ObserverError("ARGUMENT_INVALID", "ingest-receipts requires --file");
+  }
+  if (options.file !== null && options.command !== "ingest-receipts") {
+    throw new ObserverError("ARGUMENT_INVALID", "--file is supported only by ingest-receipts");
   }
   return options;
 }
@@ -112,6 +132,30 @@ export async function main(argumentsList = process.argv.slice(2)) {
       }
       if (options.json) printJson(result);
       else if (!options.quiet) process.stdout.write(renderCollect(result));
+      return 0;
+    } finally {
+      database.close();
+    }
+  }
+  if (options.command === "ingest-receipts") {
+    const database = openStateDatabase(config);
+    try {
+      const result = ingestProcedureReceipts(database, options.file);
+      try {
+        writeSnapshot(config, "latest-report.json", buildReport(database, { days: 30 }));
+        result.snapshots = { status: "completed" };
+      } catch (error) {
+        result.status = "partial";
+        result.snapshots = {
+          status: "error",
+          errorCode: error instanceof ObserverError ? error.code : "SNAPSHOT_WRITE_FAILED",
+          ingestionCommitted: true
+        };
+      }
+      if (options.json) printJson(result);
+      else process.stdout.write(
+        `Receipt ingestion ${result.status}: ${result.proceduresWritten} Procedures and ${result.capabilityStagesWritten} Capability stages written; raw content not stored.\n`
+      );
       return 0;
     } finally {
       database.close();

@@ -124,7 +124,7 @@ test("schema migration discards stale derived Codex projections and reopens thei
     database.close();
 
     database = openStateDatabase(config);
-    assert.equal(database.prepare("SELECT value FROM metadata WHERE key = 'schema_version'").get().value, "6");
+    assert.equal(database.prepare("SELECT value FROM metadata WHERE key = 'schema_version'").get().value, "8");
     assert.equal(database.prepare("SELECT count(*) AS n FROM tool_event WHERE event_id = 'derived'").get().n, 0);
     assert.equal(database.prepare("SELECT count(*) AS n FROM source_cursor WHERE source_id = 'source'").get().n, 0);
     database.close();
@@ -163,7 +163,7 @@ test("schema v3 migration purges corrupted Codex rollups for clean re-ingestion"
     database.close();
 
     database = openStateDatabase(config);
-    assert.equal(database.prepare("SELECT value FROM metadata WHERE key = 'schema_version'").get().value, "6");
+    assert.equal(database.prepare("SELECT value FROM metadata WHERE key = 'schema_version'").get().value, "8");
     assert.equal(database.prepare("SELECT count(*) AS n FROM tool_event WHERE provider = 'codex'").get().n, 0);
     assert.equal(database.prepare("SELECT count(*) AS n FROM usage_event WHERE provider = 'codex'").get().n, 0);
     assert.equal(database.prepare("SELECT count(*) AS n FROM source_cursor WHERE provider = 'codex'").get().n, 0);
@@ -195,7 +195,7 @@ test("schema v4 migration repairs stored tool taxonomy without deleting observat
       SELECT tool_namespace, route_class, is_openadam
       FROM tool_event WHERE event_id = 'reclassify'
     `).get() };
-    assert.equal(database.prepare("SELECT value FROM metadata WHERE key = 'schema_version'").get().value, "6");
+    assert.equal(database.prepare("SELECT value FROM metadata WHERE key = 'schema_version'").get().value, "8");
     assert.deepEqual(row, {
       tool_namespace: "data_transformer",
       route_class: "mcp",
@@ -218,8 +218,40 @@ test("schema v5 migration adds the bounded ZCode tie cursor", () => {
 
     database = openStateDatabase(config);
     const columns = database.prepare("PRAGMA table_info(provider_checkpoint)").all().map((row) => row.name);
-    assert.equal(database.prepare("SELECT value FROM metadata WHERE key = 'schema_version'").get().value, "6");
+    assert.equal(database.prepare("SELECT value FROM metadata WHERE key = 'schema_version'").get().value, "8");
     assert.equal(columns.includes("last_started_count"), true);
+    database.close();
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("schema v7 migration adds exact receipt outcomes without losing prior rows", () => {
+  const root = temporaryRoot();
+  try {
+    const { config } = fixtureConfig(root);
+    let database = openStateDatabase(config);
+    const now = Date.now();
+    database.prepare(`
+      INSERT INTO procedure_event(
+        event_id, invocation_hash, procedure_id, procedure_version,
+        implementation_id, implementation_version, outcome, receipt_outcome,
+        started_at_ms, completed_at_ms, duration_ms, stage_count, source_format,
+        recorded_at_ms
+      ) VALUES (?, ?, 'org.openadam.example', '0.1.0', 'org.openadam.example',
+        '0.1.0', 'success', 'success', ?, ?, 0, 1,
+        'openadam.procedure-receipt.v0.1', ?)
+    `).run("a".repeat(64), "b".repeat(64), now, now, now);
+    database.exec("ALTER TABLE procedure_event DROP COLUMN receipt_outcome");
+    database.prepare("UPDATE metadata SET value = '7' WHERE key = 'schema_version'").run();
+    database.close();
+
+    database = openStateDatabase(config);
+    const row = database.prepare(
+      "SELECT outcome, receipt_outcome FROM procedure_event WHERE event_id = ?"
+    ).get("a".repeat(64));
+    assert.equal(database.prepare("SELECT value FROM metadata WHERE key = 'schema_version'").get().value, "8");
+    assert.deepEqual({ ...row }, { outcome: "success", receipt_outcome: "success" });
     database.close();
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

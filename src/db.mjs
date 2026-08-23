@@ -5,7 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { classifyTool } from "./core/classify.mjs";
 import { ObserverError } from "./errors.mjs";
 
-const SCHEMA_VERSION = "6";
+const SCHEMA_VERSION = "8";
 
 const SCHEMA_SQL = `
 PRAGMA foreign_keys = ON;
@@ -82,6 +82,71 @@ CREATE TABLE IF NOT EXISTS usage_event (
 CREATE INDEX IF NOT EXISTS usage_event_time_idx ON usage_event(occurred_at_ms);
 CREATE INDEX IF NOT EXISTS usage_event_provider_idx ON usage_event(provider, occurred_at_ms);
 
+CREATE TABLE IF NOT EXISTS procedure_event (
+  event_id TEXT PRIMARY KEY CHECK (length(event_id) = 64),
+  invocation_hash TEXT NOT NULL CHECK (length(invocation_hash) = 64),
+  procedure_id TEXT NOT NULL CHECK (length(procedure_id) BETWEEN 1 AND 160),
+  procedure_version TEXT NOT NULL CHECK (length(procedure_version) BETWEEN 1 AND 64),
+  implementation_id TEXT NOT NULL CHECK (length(implementation_id) BETWEEN 1 AND 160),
+  implementation_version TEXT NOT NULL CHECK (length(implementation_version) BETWEEN 1 AND 64),
+  outcome TEXT NOT NULL CHECK (outcome IN ('success', 'error', 'blocked')),
+  receipt_outcome TEXT NOT NULL CHECK (receipt_outcome IN ('success', 'error', 'blocked', 'rejected')),
+  started_at_ms INTEGER NOT NULL CHECK (started_at_ms >= 0),
+  completed_at_ms INTEGER NOT NULL CHECK (completed_at_ms >= started_at_ms),
+  duration_ms INTEGER NOT NULL CHECK (duration_ms >= 0),
+  stage_count INTEGER NOT NULL CHECK (stage_count BETWEEN 1 AND 64),
+  error_code TEXT,
+  source_format TEXT NOT NULL CHECK (length(source_format) BETWEEN 1 AND 64),
+  recorded_at_ms INTEGER NOT NULL CHECK (recorded_at_ms >= 0)
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS procedure_event_time_idx ON procedure_event(completed_at_ms);
+CREATE INDEX IF NOT EXISTS procedure_event_procedure_idx ON procedure_event(procedure_id, completed_at_ms);
+
+CREATE TABLE IF NOT EXISTS capability_event (
+  event_id TEXT PRIMARY KEY CHECK (length(event_id) = 64),
+  procedure_event_id TEXT NOT NULL REFERENCES procedure_event(event_id) ON DELETE CASCADE,
+  stage_index INTEGER NOT NULL CHECK (stage_index BETWEEN 0 AND 63),
+  stage_id TEXT NOT NULL CHECK (length(stage_id) BETWEEN 1 AND 160),
+  capability_id TEXT NOT NULL CHECK (length(capability_id) BETWEEN 1 AND 160),
+  capability_version TEXT NOT NULL CHECK (length(capability_version) BETWEEN 1 AND 64),
+  operation_id TEXT NOT NULL CHECK (length(operation_id) BETWEEN 1 AND 160),
+  provider_id TEXT NOT NULL CHECK (length(provider_id) BETWEEN 1 AND 160),
+  provider_version TEXT NOT NULL CHECK (length(provider_version) BETWEEN 1 AND 64),
+  transport TEXT NOT NULL CHECK (transport IN ('mcp-tool', 'cli', 'library', 'http', 'native-function')),
+  target TEXT NOT NULL CHECK (length(target) BETWEEN 1 AND 300),
+  status TEXT NOT NULL CHECK (status IN ('success', 'error', 'skipped')),
+  duration_ms INTEGER NOT NULL CHECK (duration_ms BETWEEN 0 AND 86400000),
+  effects TEXT NOT NULL CHECK (length(effects) BETWEEN 2 AND 256),
+  error_code TEXT,
+  completed_at_ms INTEGER NOT NULL CHECK (completed_at_ms >= 0),
+  recorded_at_ms INTEGER NOT NULL CHECK (recorded_at_ms >= 0),
+  UNIQUE(procedure_event_id, stage_index)
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS capability_event_time_idx ON capability_event(completed_at_ms);
+CREATE INDEX IF NOT EXISTS capability_event_capability_idx ON capability_event(capability_id, operation_id, completed_at_ms);
+CREATE INDEX IF NOT EXISTS capability_event_target_idx ON capability_event(target);
+
+CREATE TABLE IF NOT EXISTS human_checkpoint_event (
+  event_id TEXT PRIMARY KEY CHECK (length(event_id) = 64),
+  procedure_event_id TEXT NOT NULL REFERENCES procedure_event(event_id) ON DELETE CASCADE,
+  stage_index INTEGER NOT NULL CHECK (stage_index BETWEEN 0 AND 63),
+  stage_id TEXT NOT NULL CHECK (length(stage_id) BETWEEN 1 AND 160),
+  status TEXT NOT NULL CHECK (status IN ('pending', 'accepted', 'rejected', 'skipped')),
+  authority TEXT NOT NULL CHECK (authority = 'human'),
+  decision_source TEXT CHECK (decision_source IS NULL OR decision_source = 'human'),
+  duration_ms INTEGER NOT NULL CHECK (duration_ms BETWEEN 0 AND 86400000),
+  completed_at_ms INTEGER NOT NULL CHECK (completed_at_ms >= 0),
+  recorded_at_ms INTEGER NOT NULL CHECK (recorded_at_ms >= 0),
+  UNIQUE(procedure_event_id, stage_index)
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS human_checkpoint_event_time_idx
+  ON human_checkpoint_event(completed_at_ms);
+CREATE INDEX IF NOT EXISTS human_checkpoint_event_stage_idx
+  ON human_checkpoint_event(stage_id, completed_at_ms);
+
 CREATE TABLE IF NOT EXISTS provider_health (
   provider TEXT PRIMARY KEY CHECK (provider IN ('codex', 'claude', 'zcode')),
   status TEXT NOT NULL CHECK (status IN ('ok', 'partial', 'missing', 'error', 'disabled')),
@@ -157,7 +222,7 @@ export function openStateDatabase(config) {
   const storedVersion = database.prepare("SELECT value FROM metadata WHERE key = 'schema_version'").get()?.value;
   if (storedVersion === undefined) {
     database.prepare("INSERT INTO metadata(key, value) VALUES ('schema_version', ?)").run(SCHEMA_VERSION);
-  } else if (["1", "2", "3", "4", "5"].includes(storedVersion)) {
+  } else if (["1", "2", "3", "4", "5", "6", "7"].includes(storedVersion)) {
     database.exec("BEGIN IMMEDIATE");
     try {
       const checkpointColumns = new Set(
@@ -168,6 +233,17 @@ export function openStateDatabase(config) {
           ALTER TABLE provider_checkpoint
           ADD COLUMN last_started_count INTEGER NOT NULL DEFAULT 0 CHECK (last_started_count >= 0)
         `);
+      }
+      const procedureColumns = new Set(
+        database.prepare("PRAGMA table_info(procedure_event)").all().map((row) => row.name)
+      );
+      if (!procedureColumns.has("receipt_outcome")) {
+        database.exec(`
+          ALTER TABLE procedure_event
+          ADD COLUMN receipt_outcome TEXT
+          CHECK (receipt_outcome IS NULL OR receipt_outcome IN ('success', 'error', 'blocked', 'rejected'))
+        `);
+        database.prepare("UPDATE procedure_event SET receipt_outcome = outcome").run();
       }
       if (["1", "2", "3"].includes(storedVersion)) {
         database.prepare("DELETE FROM tool_event WHERE provider = 'codex'").run();
@@ -393,6 +469,102 @@ export function putUsageEvent(database, event) {
     event.recordedAtMs
   );
   return result.changes > 0 ? 1 : 0;
+}
+
+export function putProcedureReceipt(database, receipt, recordedAtMs = Date.now()) {
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    const procedure = database.prepare(`
+      INSERT INTO procedure_event(
+        event_id, invocation_hash, procedure_id, procedure_version,
+      implementation_id, implementation_version, outcome, started_at_ms,
+        receipt_outcome, completed_at_ms, duration_ms, stage_count, error_code, source_format,
+        recorded_at_ms
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(event_id) DO NOTHING
+    `).run(
+      receipt.eventId,
+      receipt.invocationHash,
+      receipt.procedureId,
+      receipt.procedureVersion,
+      receipt.implementationId,
+      receipt.implementationVersion,
+      receipt.outcome === "rejected" ? "error" : receipt.outcome,
+      receipt.startedAtMs,
+      receipt.outcome,
+      receipt.completedAtMs,
+      receipt.durationMs,
+      receipt.stages.length,
+      receipt.errorCode ?? null,
+      receipt.sourceFormat,
+      recordedAtMs
+    );
+    let stagesWritten = 0;
+    let checkpointsWritten = 0;
+    if (procedure.changes > 0) {
+      const insertStage = database.prepare(`
+        INSERT INTO capability_event(
+          event_id, procedure_event_id, stage_index, stage_id, capability_id,
+          capability_version, operation_id, provider_id, provider_version,
+          transport, target, status, duration_ms, effects, error_code,
+          completed_at_ms, recorded_at_ms
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      const insertCheckpoint = database.prepare(`
+        INSERT INTO human_checkpoint_event(
+          event_id, procedure_event_id, stage_index, stage_id, status,
+          authority, decision_source, duration_ms, completed_at_ms, recorded_at_ms
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      for (const stage of receipt.stages) {
+        if (stage.kind === "human-checkpoint") {
+          insertCheckpoint.run(
+            stage.eventId,
+            receipt.eventId,
+            stage.index,
+            stage.stageId,
+            stage.status,
+            stage.authority,
+            stage.decisionSource,
+            stage.durationMs,
+            receipt.completedAtMs,
+            recordedAtMs
+          );
+          checkpointsWritten += 1;
+          continue;
+        }
+        insertStage.run(
+          stage.eventId,
+          receipt.eventId,
+          stage.index,
+          stage.stageId,
+          stage.capabilityId,
+          stage.capabilityVersion,
+          stage.operationId,
+          stage.providerId,
+          stage.providerVersion,
+          stage.transport,
+          stage.target,
+          stage.status,
+          stage.durationMs,
+          JSON.stringify(stage.effects),
+          stage.errorCode ?? null,
+          receipt.completedAtMs,
+          recordedAtMs
+        );
+        stagesWritten += 1;
+      }
+    }
+    database.exec("COMMIT");
+    return {
+      proceduresWritten: procedure.changes > 0 ? 1 : 0,
+      stagesWritten,
+      checkpointsWritten
+    };
+  } catch (error) {
+    if (database.isTransaction) database.exec("ROLLBACK");
+    throw error;
+  }
 }
 
 export function putProviderHealth(database, health) {
