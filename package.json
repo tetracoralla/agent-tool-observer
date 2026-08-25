@@ -9,7 +9,7 @@
   "homepage": "https://github.com/tetracoralla/agent-tool-observer",
   "repository": { "type": "git", "url": "https://github.com/tetracoralla/agent-tool-observer.git" },
   "engines": {
-    "node": ">=22"
+    "node": ">=22.13.0"
   },
   "bin": {
     "agent-tool-observer": "src/cli.mjs"
