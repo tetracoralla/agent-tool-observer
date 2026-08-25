@@ -4,7 +4,7 @@ import path from "node:path";
 import test from "node:test";
 import { collect } from "../src/collector.mjs";
 import { acquireLease, openStateDatabase, releaseLease } from "../src/db.mjs";
-import { buildReport } from "../src/report.mjs";
+import { buildReport, isCurrentReport, REPORT_SCHEMA_VERSION } from "../src/report.mjs";
 import { fixtureConfig, temporaryRoot, writeJsonl } from "./helpers.mjs";
 
 test("repeat collection is idempotent and cannot infer retirement", () => {
@@ -37,9 +37,18 @@ test("repeat collection is idempotent and cannot infer retirement", () => {
       usage: database.prepare("SELECT count(*) AS n FROM usage_event").get().n
     }, countsAfterFirst);
     const report = buildReport(database, { days: 30 }, now + 1000);
+    assert.equal(report.schemaVersion, REPORT_SCHEMA_VERSION);
+    assert.equal(isCurrentReport(report), true);
     assert.deepEqual(report.portfolio.retireCandidates, []);
     assert.deepEqual(report.portfolio.weakenRoutingCandidates, []);
-    assert.equal(report.tools.every((tool) => tool.correctnessEvidence === "unknown"), true);
+    assert.equal(report.tools.every((tool) => tool.correctnessStatus === "unknown"), true);
+    assert.equal(report.tools.every((tool) => tool.opportunityStatus === "unknown"), true);
+    const retiredClaimFields = ["correctness" + "Evidence", "opportunity" + "Evidence"];
+    assert.equal(report.tools.every((tool) => retiredClaimFields.every((field) => !(field in tool))), true);
+    const legacy = structuredClone(report);
+    delete legacy.schemaVersion;
+    legacy.tools[0]["correctness" + "Evidence"] = "unknown";
+    assert.equal(isCurrentReport(legacy), false);
     database.close();
     assert.deepEqual(fs.readFileSync(codexFile), beforeCodex);
     assert.deepEqual(fs.readFileSync(claudeFile), beforeClaude);
@@ -48,7 +57,7 @@ test("repeat collection is idempotent and cannot infer retirement", () => {
   }
 });
 
-test("runtime errors need measured evidence before fix-candidate", () => {
+test("runtime errors need enough measured calls before fix-candidate", () => {
   const root = temporaryRoot();
   try {
     const { config } = fixtureConfig(root);
@@ -124,7 +133,7 @@ test("schema migration discards stale derived Codex projections and reopens thei
     database.close();
 
     database = openStateDatabase(config);
-    assert.equal(database.prepare("SELECT value FROM metadata WHERE key = 'schema_version'").get().value, "8");
+    assert.equal(database.prepare("SELECT value FROM metadata WHERE key = 'schema_version'").get().value, "10");
     assert.equal(database.prepare("SELECT count(*) AS n FROM tool_event WHERE event_id = 'derived'").get().n, 0);
     assert.equal(database.prepare("SELECT count(*) AS n FROM source_cursor WHERE source_id = 'source'").get().n, 0);
     database.close();
@@ -163,7 +172,7 @@ test("schema v3 migration purges corrupted Codex rollups for clean re-ingestion"
     database.close();
 
     database = openStateDatabase(config);
-    assert.equal(database.prepare("SELECT value FROM metadata WHERE key = 'schema_version'").get().value, "8");
+    assert.equal(database.prepare("SELECT value FROM metadata WHERE key = 'schema_version'").get().value, "10");
     assert.equal(database.prepare("SELECT count(*) AS n FROM tool_event WHERE provider = 'codex'").get().n, 0);
     assert.equal(database.prepare("SELECT count(*) AS n FROM usage_event WHERE provider = 'codex'").get().n, 0);
     assert.equal(database.prepare("SELECT count(*) AS n FROM source_cursor WHERE provider = 'codex'").get().n, 0);
@@ -195,7 +204,7 @@ test("schema v4 migration repairs stored tool taxonomy without deleting observat
       SELECT tool_namespace, route_class, is_openadam
       FROM tool_event WHERE event_id = 'reclassify'
     `).get() };
-    assert.equal(database.prepare("SELECT value FROM metadata WHERE key = 'schema_version'").get().value, "8");
+    assert.equal(database.prepare("SELECT value FROM metadata WHERE key = 'schema_version'").get().value, "10");
     assert.deepEqual(row, {
       tool_namespace: "data_transformer",
       route_class: "mcp",
@@ -218,7 +227,7 @@ test("schema v5 migration adds the bounded ZCode tie cursor", () => {
 
     database = openStateDatabase(config);
     const columns = database.prepare("PRAGMA table_info(provider_checkpoint)").all().map((row) => row.name);
-    assert.equal(database.prepare("SELECT value FROM metadata WHERE key = 'schema_version'").get().value, "8");
+    assert.equal(database.prepare("SELECT value FROM metadata WHERE key = 'schema_version'").get().value, "10");
     assert.equal(columns.includes("last_started_count"), true);
     database.close();
   } finally {
@@ -250,8 +259,73 @@ test("schema v7 migration adds exact receipt outcomes without losing prior rows"
     const row = database.prepare(
       "SELECT outcome, receipt_outcome FROM procedure_event WHERE event_id = ?"
     ).get("a".repeat(64));
-    assert.equal(database.prepare("SELECT value FROM metadata WHERE key = 'schema_version'").get().value, "8");
+    assert.equal(database.prepare("SELECT value FROM metadata WHERE key = 'schema_version'").get().value, "10");
     assert.deepEqual({ ...row }, { outcome: "success", receipt_outcome: "success" });
+    database.close();
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("schema v8 migration drops the retired human-checkpoint table", () => {
+  const root = temporaryRoot();
+  try {
+    const { config } = fixtureConfig(root);
+    let database = openStateDatabase(config);
+    database.exec(`
+      CREATE TABLE human_checkpoint_event (
+        event_id TEXT PRIMARY KEY,
+        procedure_event_id TEXT NOT NULL,
+        stage_index INTEGER NOT NULL,
+        stage_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        authority TEXT NOT NULL,
+        decision_source TEXT,
+        duration_ms INTEGER NOT NULL,
+        completed_at_ms INTEGER NOT NULL,
+        recorded_at_ms INTEGER NOT NULL
+      )
+    `);
+    database.prepare("UPDATE metadata SET value = '8' WHERE key = 'schema_version'").run();
+    database.close();
+
+    database = openStateDatabase(config);
+    assert.equal(database.prepare("SELECT value FROM metadata WHERE key = 'schema_version'").get().value, "10");
+    assert.equal(
+      database.prepare("SELECT count(*) AS n FROM sqlite_master WHERE name = 'human_checkpoint_event'").get().n,
+      0
+    );
+    database.close();
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("schema v9 migration adds payload measurements and semantic observation tables", () => {
+  const root = temporaryRoot();
+  try {
+    const { config } = fixtureConfig(root);
+    let database = openStateDatabase(config);
+    const now = Date.now();
+    database.prepare(`
+      INSERT INTO tool_event(
+        event_id, provider, occurred_at_ms, tool_name, route_class, is_openadam,
+        derived, status, source_format, recorded_at_ms
+      ) VALUES ('v9-tool', 'claude', ?, 'Bash', 'native-shell', 0, 0,
+        'completed', 'test', ?)
+    `).run(now, now);
+    database.exec("ALTER TABLE tool_event DROP COLUMN response_bytes");
+    database.exec("ALTER TABLE tool_event DROP COLUMN request_bytes");
+    database.prepare("UPDATE metadata SET value = '9' WHERE key = 'schema_version'").run();
+    database.close();
+
+    database = openStateDatabase(config);
+    const columns = new Set(database.prepare("PRAGMA table_info(tool_event)").all().map((row) => row.name));
+    assert.equal(database.prepare("SELECT value FROM metadata WHERE key = 'schema_version'").get().value, "10");
+    assert.equal(columns.has("request_bytes"), true);
+    assert.equal(columns.has("response_bytes"), true);
+    assert.equal(database.prepare("SELECT count(*) AS n FROM tool_event WHERE event_id = 'v9-tool'").get().n, 1);
+    assert.equal(database.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'semantic_execution_event'").get().n, 1);
     database.close();
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

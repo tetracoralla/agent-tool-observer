@@ -70,6 +70,16 @@ export function resolveConfig(environment = process.env, homeDirectory = os.home
     zcodeDatabasePath: path.resolve(
       environment.ATO_ZCODE_DB || path.join(homeDirectory, ".zcode", "cli", "db", "db.sqlite")
     ),
+    directRuntimeLogs: pathList(environment.ATO_DIRECT_RUNTIME_LOGS, [
+      path.join(
+        homeDirectory,
+        "Library",
+        "Application Support",
+        "OpenAdam",
+        "Direct Execution Runtime",
+        "observations.jsonl"
+      )
+    ]),
     disabledProviders,
     limits
   });

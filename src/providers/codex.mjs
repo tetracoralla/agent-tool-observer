@@ -2,7 +2,7 @@ import { extractNestedToolNames, nonNegativeInteger } from "../core/classify.mjs
 import { eventIdentifier, hashIdentifier } from "../core/hash.mjs";
 import { completeToolEvent, putToolEvent, putUsageEvent } from "../db.mjs";
 import { ObserverError } from "../errors.mjs";
-import { normalizedToolFields, scanJsonlProvider } from "./jsonl-provider.mjs";
+import { jsonPayloadBytes, normalizedToolFields, scanJsonlProvider } from "./jsonl-provider.mjs";
 
 function timestampMs(value) {
   const parsed = typeof value === "string" ? Date.parse(value) : Number(value);
@@ -23,7 +23,7 @@ function createCodexParser({ database, sourceId, recordedAtMs }) {
   let writes = 0;
   const callNames = new Map();
 
-  function addTool(toolName, callId, occurredAtMs, status, derived = false, derivedIndex = 0) {
+  function addTool(toolName, callId, occurredAtMs, status, derived = false, derivedIndex = 0, requestBytes = null) {
     const normalized = normalizedToolFields(toolName);
     if (!derived) callNames.set(String(callId), normalized.toolName);
     const eventId = eventIdentifier("codex", derived ? "nested-tool" : "tool", sessionId, callId, derivedIndex, normalized.toolName);
@@ -41,6 +41,8 @@ function createCodexParser({ database, sourceId, recordedAtMs }) {
       status,
       durationMs: null,
       retryCount: null,
+      requestBytes,
+      responseBytes: null,
       sourceFormat: "codex-session-jsonl",
       recordedAtMs
     });
@@ -80,7 +82,8 @@ function createCodexParser({ database, sourceId, recordedAtMs }) {
           requireSessionContext();
           const name = payload.name ?? payload.tool_name ?? payload.type;
           const status = runtimeStatus(payload.status);
-          addTool(name, callId, occurredAtMs, status);
+          const requestPayload = payload.input ?? payload.arguments;
+          addTool(name, callId, occurredAtMs, status, false, 0, jsonPayloadBytes(requestPayload));
           if (name === "exec" && typeof payload.input === "string") {
             const nested = extractNestedToolNames(payload.input);
             nested.forEach((nestedName, index) => addTool(nestedName, callId, occurredAtMs, "observed", true, index + 1));
@@ -109,7 +112,8 @@ function createCodexParser({ database, sourceId, recordedAtMs }) {
             database,
             eventIdentifier("codex", "tool", sessionId, key, 0, name),
             "completed",
-            occurredAtMs ?? recordedAtMs
+            occurredAtMs ?? recordedAtMs,
+            jsonPayloadBytes(payload.output)
           );
           return;
         }

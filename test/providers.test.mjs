@@ -28,10 +28,12 @@ test("Codex parser projects wrapper and nested MCP names without raw source", ()
         input: 'await tools.mcp__math_anchor__math_run({expression:"secret-expression"}); tools.map(Boolean);'
       }
     });
-    const rows = database.prepare("SELECT tool_name, route_class, derived, status, session_hash, turn_hash, call_hash FROM tool_event ORDER BY derived").all();
+    const rows = database.prepare("SELECT tool_name, route_class, derived, status, session_hash, turn_hash, call_hash, request_bytes FROM tool_event ORDER BY derived").all();
     assert.deepEqual(rows.map((row) => row.tool_name), ["exec", "mcp__math_anchor__math_run"]);
     assert.equal(rows[1].derived, 1);
     assert.equal(rows[1].route_class, "mcp");
+    assert.equal(rows[0].request_bytes, Buffer.byteLength('await tools.mcp__math_anchor__math_run({expression:"secret-expression"}); tools.map(Boolean);'));
+    assert.equal(rows[1].request_bytes, null);
     const stored = JSON.stringify(database.prepare("SELECT * FROM tool_event").all());
     assert.equal(stored.includes("session-secret"), false);
     assert.equal(stored.includes("secret-expression"), false);
@@ -60,12 +62,13 @@ test("Codex output fallback correlates repeated call IDs within the current sess
     completion.onRecord({
       timestamp: "2026-08-21T00:00:01.000Z",
       type: "response_item",
-      payload: { type: "function_call_output", call_id: "shared-call" }
+      payload: { type: "function_call_output", call_id: "shared-call", output: "private-output" }
     });
     assert.deepEqual(database.prepare("SELECT tool_name, status FROM tool_event ORDER BY tool_name").all().map((row) => ({ ...row })), [
       { tool_name: "Bash", status: "completed" },
       { tool_name: "Read", status: "observed" }
     ]);
+    assert.equal(database.prepare("SELECT response_bytes FROM tool_event WHERE tool_name = 'Bash'").get().response_bytes, 14);
     database.close();
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
@@ -98,6 +101,8 @@ test("Claude parser correlates tool result and stores usage counts only", () => 
     const tool = database.prepare("SELECT * FROM tool_event").get();
     assert.equal(tool.status, "error");
     assert.equal(tool.duration_ms, 250);
+    assert.equal(tool.request_bytes, Buffer.byteLength(JSON.stringify({ private: "value" })));
+    assert.equal(tool.response_bytes, Buffer.byteLength("private result"));
     const usage = { ...database.prepare("SELECT input_tokens, cached_input_tokens, output_tokens, total_tokens FROM usage_event").get() };
     assert.deepEqual(usage, { input_tokens: 10, cached_input_tokens: 4, output_tokens: 3, total_tokens: 13 });
     const stored = JSON.stringify({ tool, usage });

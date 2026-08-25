@@ -1,12 +1,14 @@
 #!/usr/bin/env node
 import path from "node:path";
+import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { collect } from "./collector.mjs";
 import { resolveConfig } from "./config.mjs";
+import { ingestContextSurfaceAnalysis } from "./context-surface.mjs";
 import { openReadOnlyStateDatabase, openStateDatabase } from "./db.mjs";
 import { ObserverError } from "./errors.mjs";
-import { installLaunchAgent, uninstallLaunchAgent } from "./installer.mjs";
-import { buildReport, renderReport } from "./report.mjs";
+import { installLaunchAgent, purgeStateDirectory, uninstallLaunchAgent } from "./installer.mjs";
+import { buildReport, isCurrentReport, renderReport } from "./report.mjs";
 import { ingestProcedureReceipts } from "./semantic-receipts.mjs";
 import { readSnapshot, writeSnapshot } from "./snapshot.mjs";
 import { buildStatus, renderStatus } from "./status.mjs";
@@ -19,8 +21,10 @@ function usage() {
   agent-tool-observer status [--json]
   agent-tool-observer report [--days N] [--openadam] [--json]
   agent-tool-observer ingest-receipts --file FILE [--json]
+  agent-tool-observer ingest-context-surface --file FILE [--json]
   agent-tool-observer install [--dry-run] [--json]
   agent-tool-observer uninstall [--json]
+  agent-tool-observer purge --confirm-local-data-removal [--json]
 `;
 }
 
@@ -34,13 +38,15 @@ function parseArguments(argumentsList) {
     dryRun: false,
     openAdamOnly: false,
     days: 30,
-    file: null
+    file: null,
+    confirmLocalDataRemoval: false
   };
   for (let index = 1; index < argumentsList.length; index += 1) {
     const argument = argumentsList[index];
     if (argument === "--json") options.json = true;
     else if (argument === "--quiet") options.quiet = true;
     else if (argument === "--dry-run") options.dryRun = true;
+    else if (argument === "--confirm-local-data-removal") options.confirmLocalDataRemoval = true;
     else if (argument === "--openadam") options.openAdamOnly = true;
     else if (argument === "--days") {
       const value = Number(argumentsList[++index]);
@@ -62,11 +68,14 @@ function parseArguments(argumentsList) {
   if (options.quiet && options.command !== "collect") {
     throw new ObserverError("ARGUMENT_INVALID", "--quiet is supported only by collect");
   }
-  if (options.command === "ingest-receipts" && options.file === null) {
-    throw new ObserverError("ARGUMENT_INVALID", "ingest-receipts requires --file");
+  if (["ingest-receipts", "ingest-context-surface"].includes(options.command) && options.file === null) {
+    throw new ObserverError("ARGUMENT_INVALID", `${options.command} requires --file`);
   }
-  if (options.file !== null && options.command !== "ingest-receipts") {
-    throw new ObserverError("ARGUMENT_INVALID", "--file is supported only by ingest-receipts");
+  if (options.file !== null && !["ingest-receipts", "ingest-context-surface"].includes(options.command)) {
+    throw new ObserverError("ARGUMENT_INVALID", "--file is supported only by ingestion commands");
+  }
+  if (options.confirmLocalDataRemoval && options.command !== "purge") {
+    throw new ObserverError("ARGUMENT_INVALID", "--confirm-local-data-removal is supported only by purge");
   }
   return options;
 }
@@ -79,21 +88,6 @@ function renderCollect(result) {
   if (result.status === "skipped") return `Collection skipped: ${result.reason}\n`;
   const providers = result.providers.map((item) => `${item.provider}=${item.status}`).join(", ");
   return `Collection ${result.status}: ${providers}; ${result.eventsWritten} projected writes; no network or model calls.\n`;
-}
-
-function filterOpenAdamSnapshot(report) {
-  const tools = report.tools.filter((tool) => tool.openAdam === true);
-  return {
-    ...report,
-    filter: "openadam",
-    tools,
-    portfolio: {
-      ...report.portfolio,
-      fixCandidates: report.portfolio.fixCandidates.filter((candidate) => tools.some(
-        (tool) => tool.provider === candidate.provider && tool.toolName === candidate.toolName
-      ))
-    }
-  };
 }
 
 export async function main(argumentsList = process.argv.slice(2)) {
@@ -111,6 +105,15 @@ export async function main(argumentsList = process.argv.slice(2)) {
   if (options.command === "uninstall") {
     const result = uninstallLaunchAgent(config);
     options.json ? printJson(result) : process.stdout.write("LaunchAgent uninstalled; local observations preserved.\n");
+    return 0;
+  }
+  if (options.command === "purge") {
+    if (!options.confirmLocalDataRemoval) {
+      throw new ObserverError("PURGE_CONFIRMATION_REQUIRED", "purge requires --confirm-local-data-removal");
+    }
+    if (os.platform() === "darwin") uninstallLaunchAgent(config);
+    const result = purgeStateDirectory(config);
+    options.json ? printJson(result) : process.stdout.write("Observer service and local observation data removed.\n");
     return 0;
   }
 
@@ -154,7 +157,31 @@ export async function main(argumentsList = process.argv.slice(2)) {
       }
       if (options.json) printJson(result);
       else process.stdout.write(
-        `Receipt ingestion ${result.status}: ${result.proceduresWritten} Procedures and ${result.capabilityStagesWritten} Capability stages written; raw content not stored.\n`
+        `Receipt ingestion ${result.status}: ${result.proceduresWritten} Procedures and ${result.capabilityStagesWritten} Capability stages written; ${result.humanCheckpointsDiscarded} legacy human-checkpoint entries discarded; raw content not stored.\n`
+      );
+      return 0;
+    } finally {
+      database.close();
+    }
+  }
+  if (options.command === "ingest-context-surface") {
+    const database = openStateDatabase(config);
+    try {
+      const result = ingestContextSurfaceAnalysis(database, options.file);
+      try {
+        writeSnapshot(config, "latest-report.json", buildReport(database, { days: 30 }));
+        result.snapshots = { status: "completed" };
+      } catch (error) {
+        result.status = "partial";
+        result.snapshots = {
+          status: "error",
+          errorCode: error instanceof ObserverError ? error.code : "SNAPSHOT_WRITE_FAILED",
+          ingestionCommitted: true
+        };
+      }
+      if (options.json) printJson(result);
+      else process.stdout.write(
+        `Context Surface ingestion ${result.status}: ${result.measurementsWritten} explicit measurement written; raw catalog and schemas not stored.\n`
       );
       return 0;
     } finally {
@@ -178,10 +205,10 @@ export async function main(argumentsList = process.argv.slice(2)) {
   }
   if (options.command === "report") {
     let result;
-    if (options.days === 30) {
+    if (options.days === 30 && !options.openAdamOnly) {
       try {
         result = readSnapshot(config, "latest-report.json");
-        if (options.openAdamOnly) result = filterOpenAdamSnapshot(result);
+        if (!isCurrentReport(result)) throw new ObserverError("SNAPSHOT_STALE", "report snapshot uses an older schema");
       } catch {
         result = null;
       }

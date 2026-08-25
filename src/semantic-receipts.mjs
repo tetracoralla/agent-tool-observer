@@ -13,7 +13,6 @@ const errorCode = /^[A-Z][A-Z0-9_]*$/;
 const outcomesV01 = new Set(["success", "error", "blocked"]);
 const outcomesV02 = new Set(["success", "error", "blocked", "rejected"]);
 const capabilityStatuses = new Set(["success", "error", "skipped"]);
-const checkpointStatuses = new Set(["pending", "accepted", "rejected", "skipped"]);
 const transports = new Set(["mcp-tool", "cli", "library", "http", "native-function"]);
 const effects = new Set(["none", "read", "write", "destructive", "network", "model"]);
 
@@ -119,54 +118,16 @@ function projectCapabilityStage(stage, index, receiptEventId, requireKind) {
   };
 }
 
-function assertDigestList(value, label) {
-  if (!Array.isArray(value) || value.length > 32 || new Set(value).size !== value.length
-      || value.some((item) => !digest.test(item))) {
-    invalid(`${label} is invalid`);
+function discardHumanCheckpoint(stage) {
+  // Legacy v0.2 receipts may still carry human-checkpoint stages. The portable
+  // approval semantics behind them were removed from the standards on
+  // 2026-08-23, so only the entry shape is checked and nothing is persisted.
+  if (stage === null || typeof stage !== "object" || Array.isArray(stage)
+      || typeof stage.stageId !== "string" || stage.stageId.length < 1
+      || stage.stageId.length > 160) {
+    invalid("human checkpoint entry is malformed");
   }
-}
-
-function projectHumanCheckpoint(stage, index, receiptEventId) {
-  if (!exactObject(
-    stage,
-    ["kind", "stageId", "status", "authority", "criteriaDigest", "durationMs", "effects"],
-    ["decision"]
-  )) invalid("human checkpoint fields are invalid");
-  if (stage.kind !== "human-checkpoint") invalid("human checkpoint kind is invalid");
-  assertStableId(stage.stageId, "checkpoint stageId");
-  if (!checkpointStatuses.has(stage.status)) invalid("human checkpoint status is invalid");
-  if (stage.authority !== "human") invalid("human checkpoint authority is invalid");
-  if (!digest.test(stage.criteriaDigest)) invalid("human checkpoint criteriaDigest is invalid");
-  if (!Number.isSafeInteger(stage.durationMs) || stage.durationMs < 0
-      || stage.durationMs > 86400000) {
-    invalid("human checkpoint duration is invalid");
-  }
-  if (!Array.isArray(stage.effects) || stage.effects.length !== 1 || stage.effects[0] !== "none") {
-    invalid("human checkpoint effects are invalid");
-  }
-  const decided = stage.status === "accepted" || stage.status === "rejected";
-  if (decided) {
-    if (!exactObject(stage.decision, ["source", "recordedAt"], ["evidenceDigests"])) {
-      invalid("human checkpoint decision is invalid");
-    }
-    if (stage.decision.source !== "human") invalid("human checkpoint decision source is invalid");
-    dateMs(stage.decision.recordedAt, "human checkpoint recordedAt");
-    if (stage.decision.evidenceDigests !== undefined) {
-      assertDigestList(stage.decision.evidenceDigests, "human checkpoint evidenceDigests");
-    }
-  } else if (stage.decision !== undefined) {
-    invalid("undecided human checkpoint contains a decision");
-  }
-  return {
-    eventId: eventIdentifier("semantic-receipt", "checkpoint", receiptEventId, index),
-    kind: "human-checkpoint",
-    index,
-    stageId: stage.stageId,
-    status: stage.status,
-    authority: "human",
-    decisionSource: decided ? "human" : null,
-    durationMs: stage.durationMs
-  };
+  return null;
 }
 
 export function projectProcedureReceipt(value) {
@@ -220,24 +181,20 @@ export function projectProcedureReceipt(value) {
     value.invocationId,
     value.completedAt
   );
-  const stages = value.stages.map((stage, index) => {
-    if (!isV02) return projectCapabilityStage(stage, index, eventId, false);
-    if (stage?.kind === "capability") {
-      return projectCapabilityStage(stage, index, eventId, true);
-    }
-    if (stage?.kind === "human-checkpoint") {
-      return projectHumanCheckpoint(stage, index, eventId);
-    }
-    invalid("stage kind is invalid");
-  });
-  if (value.outcome === "blocked"
-      && !stages.some((stage) => stage.kind === "human-checkpoint" && stage.status === "pending")) {
-    invalid("blocked receipt has no pending human checkpoint");
-  }
-  if (value.outcome === "rejected"
-      && !stages.some((stage) => stage.kind === "human-checkpoint" && stage.status === "rejected")) {
-    invalid("rejected receipt has no rejected human checkpoint");
-  }
+  let checkpointsDiscarded = 0;
+  const stages = value.stages
+    .map((stage, index) => {
+      if (!isV02) return projectCapabilityStage(stage, index, eventId, false);
+      if (stage?.kind === "capability") {
+        return projectCapabilityStage(stage, index, eventId, true);
+      }
+      if (stage?.kind === "human-checkpoint") {
+        checkpointsDiscarded += 1;
+        return discardHumanCheckpoint(stage);
+      }
+      invalid("stage kind is invalid");
+    })
+    .filter((stage) => stage !== null);
   return {
     eventId,
     invocationHash: hashIdentifier("semantic-receipt:invocation", value.invocationId),
@@ -251,6 +208,7 @@ export function projectProcedureReceipt(value) {
     durationMs: completedAtMs - startedAtMs,
     errorCode: receiptErrorCode,
     sourceFormat: value.schemaVersion,
+    checkpointsDiscarded,
     stages
   };
 }
@@ -288,19 +246,19 @@ export function ingestProcedureReceipts(database, filePath, recordedAtMs = Date.
   const projected = receiptValues(fs.readFileSync(filePath, "utf8")).map(projectProcedureReceipt);
   let proceduresWritten = 0;
   let stagesWritten = 0;
-  let checkpointsWritten = 0;
+  let humanCheckpointsDiscarded = 0;
   for (const receipt of projected) {
     const result = putProcedureReceipt(database, receipt, recordedAtMs);
     proceduresWritten += result.proceduresWritten;
     stagesWritten += result.stagesWritten;
-    checkpointsWritten += result.checkpointsWritten;
+    humanCheckpointsDiscarded += receipt.checkpointsDiscarded;
   }
   return {
     status: "completed",
     receiptsRead: projected.length,
     proceduresWritten,
     capabilityStagesWritten: stagesWritten,
-    humanCheckpointsWritten: checkpointsWritten,
+    humanCheckpointsDiscarded,
     rawContentStored: false,
     sourcePathStored: false,
     networkUsed: false,

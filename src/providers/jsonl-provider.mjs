@@ -14,6 +14,12 @@ export function normalizedToolFields(toolName) {
   };
 }
 
+export function jsonPayloadBytes(value) {
+  if (value === undefined) return null;
+  const serialized = typeof value === "string" ? value : JSON.stringify(value);
+  return typeof serialized === "string" ? Buffer.byteLength(serialized) : null;
+}
+
 function emptyHealth(provider, scannedAtMs) {
   return {
     provider,

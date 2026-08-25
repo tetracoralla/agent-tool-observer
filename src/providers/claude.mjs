@@ -1,7 +1,7 @@
 import { nonNegativeInteger } from "../core/classify.mjs";
 import { eventIdentifier, hashIdentifier } from "../core/hash.mjs";
 import { completeToolEvent, putToolEvent, putUsageEvent } from "../db.mjs";
-import { normalizedToolFields, scanJsonlProvider } from "./jsonl-provider.mjs";
+import { jsonPayloadBytes, normalizedToolFields, scanJsonlProvider } from "./jsonl-provider.mjs";
 
 function timestampMs(value) {
   const parsed = typeof value === "string" ? Date.parse(value) : Number(value);
@@ -34,6 +34,8 @@ function createClaudeParser({ database, sourceId, recordedAtMs }) {
             status: "observed",
             durationMs: null,
             retryCount: null,
+            requestBytes: jsonPayloadBytes(item.input),
+            responseBytes: null,
             sourceFormat: "claude-project-jsonl",
             recordedAtMs
           });
@@ -44,7 +46,8 @@ function createClaudeParser({ database, sourceId, recordedAtMs }) {
             database,
             eventIdentifier("claude", "tool", sessionId, item.tool_use_id),
             status,
-            occurredAtMs ?? recordedAtMs
+            occurredAtMs ?? recordedAtMs,
+            jsonPayloadBytes(item.content)
           );
         }
       }

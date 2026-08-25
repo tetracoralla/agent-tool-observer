@@ -13,18 +13,20 @@ export function fixtureConfig(root, overrides = {}) {
   const codex = path.join(root, "codex");
   const claude = path.join(root, "claude");
   const zcode = path.join(root, "zcode.sqlite");
+  const directRuntime = path.join(root, "direct-runtime.jsonl");
   for (const directory of [home, codex, claude]) fs.mkdirSync(directory, { recursive: true });
   const environment = {
     ATO_STATE_DIR: state,
     ATO_CODEX_ROOTS: codex,
     ATO_CLAUDE_ROOTS: claude,
     ATO_ZCODE_DB: zcode,
+    ATO_DIRECT_RUNTIME_LOGS: directRuntime,
     ATO_LOOKBACK_DAYS: "30",
     ...overrides
   };
   return {
     config: resolveConfig(environment, home),
-    paths: { home, state, codex, claude, zcode },
+    paths: { home, state, codex, claude, zcode, directRuntime },
     environment
   };
 }

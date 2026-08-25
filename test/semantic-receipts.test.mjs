@@ -148,9 +148,9 @@ test("semantic receipt ingestion is bounded, idempotent, and metadata-only", () 
 
     const report = buildReport(database, { days: 2 }, Date.parse("2026-08-22T03:00:00Z"));
     assert.equal(report.procedures[0].procedureId, "org.openadam.brand-asset.prepare");
-    assert.equal(report.procedures[0].correctnessEvidence, "unknown");
+    assert.equal(report.procedures[0].correctnessStatus, "unknown");
     assert.equal(report.capabilities.length, 2);
-    assert.equal(report.capabilities.every((item) => item.correctnessEvidence === "unknown"), true);
+    assert.equal(report.capabilities.every((item) => item.correctnessStatus === "unknown"), true);
     const trim = report.capabilities.find((item) => item.operationId === "trim-transparent");
     assert.equal(trim.passiveObservedCalls, 1);
     assert.equal(trim.passiveMappingBasis, "declared-receipt-binding-target");
@@ -231,7 +231,7 @@ test("report nominates repeated unmapped tools and repeated sequences without cl
       "mcp__alpha__inspect",
       "mcp__beta__convert"
     ]);
-    assert.equal(report.portfolio.procedureCandidates[0].correctnessEvidence, "unknown");
+    assert.equal(report.portfolio.procedureCandidates[0].correctnessStatus, "unknown");
     assert.deepEqual(report.portfolio.retireCandidates, []);
     database.close();
   } finally {
@@ -247,7 +247,7 @@ test("receipt projection accepts sub-millisecond ISO timestamps and hashes ident
   assert.notEqual(projected.invocationHash, "private-id");
 });
 
-test("v0.2 human checkpoints are stored as bounded metadata without review evidence", () => {
+test("v0.2 human-checkpoint stages are read and discarded, not persisted", () => {
   const root = temporaryRoot();
   try {
     const { config } = fixtureConfig(root);
@@ -258,24 +258,17 @@ test("v0.2 human checkpoints are stored as bounded metadata without review evide
 
     assert.equal(result.proceduresWritten, 1);
     assert.equal(result.capabilityStagesWritten, 1);
-    assert.equal(result.humanCheckpointsWritten, 1);
+    assert.equal(result.humanCheckpointsDiscarded, 1);
     assert.equal(database.prepare("SELECT count(*) AS n FROM capability_event").get().n, 1);
-    const checkpoint = database.prepare("SELECT * FROM human_checkpoint_event").get();
-    assert.equal(checkpoint.status, "accepted");
-    assert.equal(checkpoint.authority, "human");
-    assert.equal(checkpoint.decision_source, "human");
-    assert.equal(JSON.stringify(checkpoint).includes("sha256:"), false);
+    assert.equal(
+      database.prepare("SELECT count(*) AS n FROM sqlite_master WHERE name = 'human_checkpoint_event'").get().n,
+      0
+    );
 
     const report = buildReport(database, { days: 2 }, Date.parse("2026-08-22T03:00:00Z"));
-    assert.deepEqual(report.humanCheckpoints[0].decisions, {
-      pending: 0,
-      accepted: 1,
-      rejected: 0,
-      skipped: 0
-    });
-    assert.equal(report.humanCheckpoints[0].authorityEvidence, "declared-human-source");
-    assert.equal(report.humanCheckpoints[0].identityAuthentication, "host-required");
-    assert.equal(report.humanCheckpoints[0].correctnessEvidence, "unknown");
+    assert.equal("humanCheckpoints" in report, false);
+    assert.equal(report.procedures.length, 1);
+    assert.equal(report.procedures[0].correctnessStatus, "unknown");
     database.close();
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
@@ -294,15 +287,16 @@ test("human rejection remains distinct from runtime error in reports", () => {
     const report = buildReport(database, { days: 2 }, Date.parse("2026-08-22T03:00:00Z"));
     assert.equal(report.procedures[0].runtime.errors, 0);
     assert.equal(report.procedures[0].runtime.rejected, 1);
-    assert.equal(report.humanCheckpoints[0].decisions.rejected, 1);
     database.close();
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
 
-test("an Agent decision source cannot satisfy a v0.2 human checkpoint", () => {
+test("v0.2 checkpoint decision details no longer gate ingestion", () => {
   const value = reviewReceipt("accepted");
   value.stages[1].decision.source = "agent";
-  assert.throws(() => projectProcedureReceipt(value), { code: "RECEIPT_INVALID" });
+  const projected = projectProcedureReceipt(value);
+  assert.equal(projected.checkpointsDiscarded, 1);
+  assert.equal(projected.stages.every((stage) => stage.kind === "capability"), true);
 });

@@ -17,7 +17,9 @@ telemetry role and no hosted service.
 Codex persisted events  --- read-only adapter --\
 Claude persisted events --- read-only adapter ---- local projection -> report
 ZCode usage database    --- read-only adapter --/
-Procedure receipt file  --- explicit validator -/
+Direct Runtime JSONL    --- exact-file adapter --/
+Procedure receipt file  --- explicit validator -- local projection -> report
+Context analysis result --- explicit validator -/
                                                     |
                                                     +-> targeted candidate only
                                                         agent-tool-evals
@@ -37,9 +39,13 @@ The observer never:
 - treats completion as correctness;
 - automatically weakens routing or retires a tool.
 
-An explicit Procedure-receipt import is the only semantic ingestion path in
-v0.1. It validates and projects a bounded receipt file supplied by the owner or
-an in-scope implementation. It does not scan arbitrary output directories.
+Semantic input has three distinct paths. Legacy Procedure-receipt import validates
+and projects a bounded file supplied by the owner or an in-scope implementation.
+Direct Runtime collection reads only its exact optional metadata log and accepts
+only the closed `openadam.direct-execution-observation.v0.1` event shape. Static
+Context Surface measurement is an explicit import of an Analyzer result. None
+of these paths scans arbitrary output directories or discovers installed tool
+catalogs.
 
 ## Automatic flow
 
@@ -55,8 +61,9 @@ five minutes. Each run:
 4. opens the ZCode database read-only and projects new or newly completed
    usage rows in bounded pages from privacy-safe incremental checkpoints;
 5. hashes source identifiers and writes only normalized metadata;
-6. writes bounded metadata-only status and 30-day report snapshots;
-7. records independent provider health and exits.
+6. incrementally reads the exact optional Direct Runtime metadata log;
+7. writes bounded metadata-only status and 30-day report snapshots;
+8. records independent provider/source health and exits.
 
 No process listens for connections or remains resident between scans.
 
@@ -83,9 +90,14 @@ Tool observations retain:
 - route class and whether the observation was statically derived from an
   orchestration envelope;
 - observed timestamp, runtime status, duration, and retry count when present.
+- serialized request/result byte counts when the provider record exposes the
+  payload; the serialized content is discarded immediately.
 
 Usage observations retain hashed provider event and session identifiers plus
 input, cached-input, output, reasoning, and total token counts when present.
+Claude and ZCode usage may be associated with the same hashed turn as one or
+more tools. That is shared-turn association, not single-tool attribution. Codex
+usage is a cumulative per-session rollup and is never projected onto one tool.
 
 Provider health retains only provider state, stable error code, counts, and
 timestamps. Source cursors retain a path hash, file identity, byte offset,
@@ -103,25 +115,43 @@ provider IDs; binding transport and target; runtime status, duration, effects,
 and stable error code. Receipt input/output digests are validated but not
 stored.
 
-Human-checkpoint observations retain only Procedure identity, checkpoint stage
-ID, declared human authority, pending/accepted/rejected/skipped state, timing,
-and whether a human decision source was declared. Criteria digests, evidence
-digests, reviewer identity, and review content are not stored. The observer
-reports `declared-human-source` and `host-required` authentication; it never
-turns a human decision into correctness evidence.
+Direct Runtime observations retain only hashed work-order/call identity,
+versioned semantic target and provider identity, binding/contract digests,
+terminal status and stable error code, timing, cold/warm session state, and
+numeric serialized payload sizes. The Runtime event declares zero model calls
+and leaves token and monetary cost null; the observer preserves that boundary.
+
+Imported Context Surface analyses retain source ID/revision, snapshot and
+catalog digests, catalog/tool/schema byte counts, duplicate/collision counts,
+and explicitly reported token measurements. Tool descriptions and schemas are
+not copied into the observer. An import does not establish that the snapshot is
+the currently installed catalog; that binding status remains `not_assessed`.
+
+Legacy v0.2 receipts may still contain human-checkpoint stages. The portable
+approval semantics behind them were removed from the Procedure standard on
+2026-08-23, so the observer checks only the entry shape and discards it on
+read. No checkpoint, approval, authority, decision-source, reviewer identity,
+criteria, or evidence field is stored, aggregated, or reported, and the
+observer never turns a recorded human decision into a correctness claim.
 
 When a receipt declares an MCP binding target, the report may map matching
 passive MCP names to that Capability and count `passiveObservedCalls`. The
 mapping basis is recorded as `declared-receipt-binding-target`; it is usage
-evidence only and does not turn passive completion into conformance or
-correctness evidence.
+observation only and does not turn passive completion into conformance or
+correctness.
 
 ## Report semantics
+
+The current JSON report is
+`openadam.agent-tool-observer.report.v0.3`. A snapshot without that exact
+version is stale input and is rebuilt from the current database. v0.3 uses
+`correctnessStatus` and `opportunityStatus`; both remain `unknown` unless a
+separate current assessment owns the judgment.
 
 The report emits these signals:
 
 - `observed-use`: repeated calls exist, without claiming correctness or value;
-- `fix-candidate`: enough measured calls exist and runtime error evidence is
+- `fix-candidate`: enough measured calls exist and the observed runtime error rate is
   materially high;
 - `insufficient-data`: the passive record cannot support a stronger claim.
 
@@ -135,10 +165,12 @@ Two discovery signals are deliberately weaker than recommendations:
 
 - repeated MCP calls with no observed semantic binding become
   `candidate-for-capability-contract`;
-- an identical 2–8 tool sequence repeated in at least three turns across at
-  least two hashed sessions becomes `candidate-for-procedure-evaluation`.
+- an identical 2–8 non-derived MCP sequence repeated in at least three turns
+  across at least two hashed sessions becomes
+  `candidate-for-procedure-evaluation`. Orchestration wrappers and statically
+  derived nested names are excluded.
 
-Both retain `correctnessEvidence: unknown`. They nominate definition and
+Both retain `correctnessStatus: unknown`. They nominate definition and
 conformance work; they do not assert the observed sequence is the right method.
 
 ## Provider status
@@ -160,6 +192,10 @@ Production defaults are owner-local and require no setup. Tests and explicit
 human invocations may override roots through `ATO_*` environment variables.
 Overrides change only what this observer reads; they never grant write access
 to a provider source.
+
+`ATO_DIRECT_RUNTIME_LOGS` accepts an explicit platform-delimited list of exact
+metadata-log paths. It does not accept a discovery root. The Direct Runtime
+must separately be launched with `--observation-log` for events to exist.
 
 ## Non-goals for v0.1
 

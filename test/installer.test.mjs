@@ -3,14 +3,15 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { fixtureConfig, temporaryRoot } from "./helpers.mjs";
-import { installLaunchAgent, prepareOwnerLogFiles, renderLaunchAgent } from "../src/installer.mjs";
+import { copyRuntimeBundle, installLaunchAgent, prepareOwnerLogFiles, purgeStateDirectory, renderLaunchAgent } from "../src/installer.mjs";
 
 test("LaunchAgent runs one fixed short-lived collector without KeepAlive or shell", () => {
   const plist = renderLaunchAgent({
     nodePath: "/safe/node&binary",
     cliPath: "/safe/observer<cli>.mjs",
     stdoutPath: "/safe/out.log",
-    stderrPath: "/safe/err.log"
+    stderrPath: "/safe/err.log",
+    directRuntimeLogs: ["/private/runtime/observations.jsonl"]
   });
   assert.match(plist, /<key>StartInterval<\/key>/);
   assert.match(plist, /<integer>300<\/integer>/);
@@ -21,6 +22,8 @@ test("LaunchAgent runs one fixed short-lived collector without KeepAlive or shel
   assert.doesNotMatch(plist, /<string>--json<\/string>/);
   assert.match(plist, /node&amp;binary/);
   assert.match(plist, /observer&lt;cli&gt;/);
+  assert.match(plist, /ATO_DIRECT_RUNTIME_LOGS/);
+  assert.match(plist, /\/private\/runtime\/observations\.jsonl/);
 });
 
 test("install dry-run performs no filesystem mutation", () => {
@@ -49,6 +52,49 @@ test("LaunchAgent log preparation repairs modes and rejects symlink targets", ()
     fs.unlinkSync(stderrPath);
     fs.symlinkSync(stdoutPath, stderrPath);
     assert.throws(() => prepareOwnerLogFiles({ stdoutPath, stderrPath }), { code: "LOG_TARGET_INVALID" });
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("content-addressed installation keeps a fixed runtime when source later changes", () => {
+  const root = temporaryRoot();
+  try {
+    const { config } = fixtureConfig(root);
+    const source = path.join(root, "runtime-source");
+    fs.mkdirSync(path.join(source, "src"), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(source, "package.json"), JSON.stringify({ version: "1.2.3" }), { mode: 0o600 });
+    fs.writeFileSync(path.join(source, "src", "cli.mjs"), "export const value = 1;\n", { mode: 0o600 });
+    const first = copyRuntimeBundle(config, { sourceRoot: source });
+    assert.equal(fs.readFileSync(first.cliPath, "utf8"), "export const value = 1;\n");
+
+    fs.writeFileSync(path.join(source, "src", "cli.mjs"), "export const value = 2;\n", { mode: 0o600 });
+    const second = copyRuntimeBundle(config, { sourceRoot: source });
+    assert.notEqual(first.digest, second.digest);
+    assert.notEqual(first.bundlePath, second.bundlePath);
+    assert.equal(fs.readFileSync(first.cliPath, "utf8"), "export const value = 1;\n");
+    assert.equal(fs.readFileSync(second.cliPath, "utf8"), "export const value = 2;\n");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("explicit purge removes only the resolved real state directory", () => {
+  const root = temporaryRoot();
+  try {
+    const { config } = fixtureConfig(root);
+    fs.mkdirSync(config.stateDir, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(config.stateDir, "observation.txt"), "metadata", { mode: 0o600 });
+    const result = purgeStateDirectory(config);
+    assert.equal(result.removed, true);
+    assert.equal(fs.existsSync(config.stateDir), false);
+
+    const target = path.join(root, "target");
+    const linked = path.join(root, "linked-state");
+    fs.mkdirSync(target, { mode: 0o700 });
+    fs.symlinkSync(target, linked);
+    assert.throws(() => purgeStateDirectory({ ...config, stateDir: linked }), { code: "PURGE_STATE_DIR_UNSAFE" });
+    assert.equal(fs.existsSync(target), true);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

@@ -1,17 +1,20 @@
 # Current status
 
-Verified on 2026-08-21 on the owner Mac.
+Verified on 2026-08-25 on the owner Mac.
 
 ## Development regression: PASS
 
 - `npm run check`: PASS;
-- 31 Node tests cover all three provider adapters, idempotency, active-lease
+- 46 Node tests cover all three Agent-shell adapters, Direct Runtime metadata,
+  Context Surface import, idempotency, active-lease
   exclusion, partial lines, malformed/deep/oversized records, truncation,
   symlink rejection, privacy projection, conservative report claims,
   code-text false-positive exclusion, schema migration and taxonomy repair,
   provider-schema drift, bounded ZCode pagination and timestamp ties,
   fail-closed Codex context recovery, session-scoped call correlation,
-  LaunchAgent rendering, and owner-only log targets;
+  LaunchAgent rendering, content-addressed runtime installation, owner-only log
+  targets, payload-size projection, shared-turn token association, and the
+  wrapper/derived Procedure-candidate negative case;
 - production-source contract check confirms no networking modules, dynamic
   evaluation, or third-party runtime dependencies;
 - fixture CLI smoke completes collection, status, report, and privacy checks.
@@ -21,11 +24,14 @@ Verified on 2026-08-21 on the owner Mac.
 - LaunchAgent label: `com.openadam.agent-tool-observer`;
 - schedule: run at login and every 300 seconds;
 - execution: one short-lived `collect` process, no `KeepAlive`;
-- current loaded program resolves through the stable Homebrew Node 22 path;
+- current loaded program resolves through the stable Homebrew Node 22 path and
+  the fixed content-addressed Observer runtime
+  `0.1.0-692bd44a5d346185fa6ab7cfb65eafc3a37b2c1b827324bf81fbe8f7aee89021`;
 - idempotent reinstall: PASS;
-- RunAtLoad collection completed with exit code 0;
-- scheduled successful collection is quiet: the existing stdout log remained
-  exactly 49,033 bytes while both snapshots advanced;
+- the LaunchAgent no longer references the mutable development checkout;
+- RunAtLoad and a subsequent fixed-runtime collection completed with exit code
+  0; the loaded service is short-lived and currently not running between its
+  five-minute intervals;
 - owner-only SQLite, status snapshot, report snapshot, and log files were
   created under the declared Application Support directory;
 - status/report snapshots are readable without opening the live WAL database.
@@ -37,9 +43,15 @@ Verified on 2026-08-21 on the owner Mac.
   under bounded pagination;
   a settled source now produces zero repeated event writes while terminal-state
   transitions remain refreshable;
-- Codex: PARTIAL, the installed RunAtLoad scan safely consumed its 64 MiB share
-  and left 146 source backlogs for later five-minute runs; no source error was
-  reported and the cursor will continue automatically;
+- Codex: PASS, current source is caught up with no backlog or skipped lines;
+- Direct Runtime metadata: PASS, one owner-only exact JSONL source is caught up;
+  715 actual local-pilot calls are stored as semantic execution metadata across
+  Math Anchor, Migratory Time, Dependency Preflight, and Structured Data
+  Preflight targets;
+- Context Surface import: PASS, one explicit current local plugin-subset
+  measurement records 42 tools, 70 schemas, 256,417 canonical catalog bytes,
+  and zero claimed token measurements. It does not claim complete Codex catalog
+  coverage or current installed binding.
 
 ## Privacy and side effects: PASS
 
@@ -51,17 +63,18 @@ Verified on 2026-08-21 on the owner Mac.
   snapshot, log, and plist targets; no tool-repository write path exists;
 - installer and snapshot failures report committed side effects explicitly.
 
-The before/after repository fingerprint check remained identical for every
-pre-existing tool repository except `universal-inspector`, whose already-dirty
-working tree changed concurrently during this review. The observer has no
-source mutation primitive or configured path into that repository, so this is
-recorded as an external concurrency exception rather than observer output.
+The v0.3 report now marks dynamic payload-byte coverage and shared-turn token
+association as partial, rather than treating missing rows as zero. Existing
+history predates payload-byte collection; current Codex coverage begins with
+newly observed `exec` envelopes. Direct Runtime events provide per-semantic-call
+request/result sizes and zero-model timing. Monetary cost remains unavailable
+because compatible model and pricing identity are not observed per tool call.
 
 ## Claim boundary
 
 The current report supports observed-use and runtime-error signals. It does not
 produce weaken-routing or retirement candidates until comparable opportunity,
-routing-mode, and controlled evaluation evidence exists.
+routing-mode observations and a controlled evaluation assessment exist.
 
 ## Business/experience acceptance
 

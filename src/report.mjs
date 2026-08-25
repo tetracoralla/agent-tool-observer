@@ -1,13 +1,28 @@
 import {
   capabilityReportRows,
-  humanCheckpointReportRows,
+  directRuntimeHealth,
+  latestContextSurfaceRows,
   procedureReportRows,
   providerHealth,
   semanticTargets,
+  semanticExecutionReportRows,
   toolReportRows,
   toolSequenceEvents,
+  toolUsageAssociationRows,
   usageReportRows
 } from "./db-read.mjs";
+
+export const REPORT_SCHEMA_VERSION = "openadam.agent-tool-observer.report.v0.3";
+
+export function isCurrentReport(value) {
+  return value?.schemaVersion === REPORT_SCHEMA_VERSION
+    && Array.isArray(value.tools)
+    && value.cost?.monetary?.status === "unavailable"
+    && value.tools.every((tool) => tool?.correctnessStatus === "unknown"
+      && tool?.opportunityStatus === "unknown"
+      && !(("correctness" + "Evidence") in tool)
+      && !(("opportunity" + "Evidence") in tool));
+}
 
 function numeric(value) {
   return value === null || value === undefined ? null : Number(value);
@@ -63,7 +78,7 @@ function sequenceCandidates(rows) {
       observedTurns: candidate.turns,
       observedSessions: candidate.sessions.size,
       signal: "candidate-for-procedure-evaluation",
-      correctnessEvidence: "unknown"
+      correctnessStatus: "unknown"
     }))
     .sort((left, right) => right.observedTurns - left.observedTurns
       || left.sequence.join("\0").localeCompare(right.sequence.join("\0")))
@@ -73,9 +88,14 @@ function sequenceCandidates(rows) {
 export function buildReport(database, options = {}, nowMs = Date.now()) {
   const days = options.days ?? 30;
   const cutoffMs = nowMs - days * 24 * 60 * 60 * 1000;
+  const usageAssociations = new Map(
+    toolUsageAssociationRows(database, cutoffMs, options.openAdamOnly === true)
+      .map((row) => [`${row.provider}\0${row.tool_name}`, row])
+  );
   const tools = toolReportRows(database, cutoffMs, options.openAdamOnly === true).map((row) => {
     const measured = Number(row.measured);
     const errors = Number(row.errors);
+    const associated = usageAssociations.get(`${row.provider}\0${row.tool_name}`);
     return {
       provider: row.provider,
       toolName: row.tool_name,
@@ -93,11 +113,39 @@ export function buildReport(database, options = {}, nowMs = Date.now()) {
         retries: numeric(row.retries)
       },
       derivedCalls: Number(row.derived),
+      payload: {
+        requestBytes: numeric(row.request_bytes),
+        responseBytes: numeric(row.response_bytes),
+        requestBytesMeasuredCalls: Number(row.request_bytes_measured),
+        responseBytesMeasuredCalls: Number(row.response_bytes_measured),
+        measurementBasis: "serialized-tool-payload-size-without-content-retention"
+      },
+      turnAssociatedUsage: associated ? {
+        associatedTurns: Number(associated.associated_turns),
+        usageRecords: Number(associated.usage_records),
+        inputTokens: numeric(associated.input_tokens),
+        cachedInputTokens: numeric(associated.cached_input_tokens),
+        outputTokens: numeric(associated.output_tokens),
+        reasoningTokens: numeric(associated.reasoning_tokens),
+        totalTokens: numeric(associated.total_tokens),
+        allocation: "shared-turn-not-attributed-to-one-tool"
+      } : {
+        associatedTurns: 0,
+        usageRecords: 0,
+        inputTokens: null,
+        cachedInputTokens: null,
+        outputTokens: null,
+        reasoningTokens: null,
+        totalTokens: null,
+        allocation: row.provider === "codex"
+          ? "unavailable-session-cumulative-provider-usage"
+          : "no-matching-turn-usage"
+      },
       firstObservedAtMs: numeric(row.first_observed_at_ms),
       lastObservedAtMs: numeric(row.last_observed_at_ms),
       signal: signalFor(row),
-      correctnessEvidence: "unknown",
-      opportunityEvidence: "unknown",
+      correctnessStatus: "unknown",
+      opportunityStatus: "unknown",
       routingMode: "unknown"
     };
   });
@@ -109,7 +157,12 @@ export function buildReport(database, options = {}, nowMs = Date.now()) {
     outputTokens: numeric(row.output_tokens),
     reasoningTokens: numeric(row.reasoning_tokens),
     totalTokens: numeric(row.total_tokens),
-    averageDurationMs: numeric(row.average_duration_ms)
+    averageDurationMs: numeric(row.average_duration_ms),
+    semantics: row.provider === "codex"
+      ? "latest-cumulative-session-rollup-per-observed-session"
+      : row.provider === "claude"
+        ? "message-usage-total-excludes-separately-reported-cache-read"
+        : "provider-reported-model-usage-record"
   }));
   const procedures = procedureReportRows(database, cutoffMs).map((row) => ({
     procedureId: row.procedure_id,
@@ -126,7 +179,7 @@ export function buildReport(database, options = {}, nowMs = Date.now()) {
     },
     firstObservedAtMs: numeric(row.first_observed_at_ms),
     lastObservedAtMs: numeric(row.last_observed_at_ms),
-    correctnessEvidence: "unknown"
+    correctnessStatus: "unknown"
   }));
   const capabilities = capabilityReportRows(database, cutoffMs).map((row) => {
     const passiveObservedCalls = row.transport === "mcp-tool"
@@ -154,30 +207,9 @@ export function buildReport(database, options = {}, nowMs = Date.now()) {
       },
       firstObservedAtMs: numeric(row.first_observed_at_ms),
       lastObservedAtMs: numeric(row.last_observed_at_ms),
-      correctnessEvidence: "unknown"
+      correctnessStatus: "unknown"
     };
   });
-  const humanCheckpoints = humanCheckpointReportRows(database, cutoffMs).map((row) => ({
-    procedureId: row.procedure_id,
-    procedureVersion: row.procedure_version,
-    implementationId: row.implementation_id,
-    implementationVersion: row.implementation_version,
-    stageId: row.stage_id,
-    authority: row.authority,
-    observations: Number(row.observations),
-    decisions: {
-      pending: Number(row.pending),
-      accepted: Number(row.accepted),
-      rejected: Number(row.rejected),
-      skipped: Number(row.skipped)
-    },
-    averageDurationMs: numeric(row.average_duration_ms),
-    firstObservedAtMs: numeric(row.first_observed_at_ms),
-    lastObservedAtMs: numeric(row.last_observed_at_ms),
-    authorityEvidence: "declared-human-source",
-    identityAuthentication: "host-required",
-    correctnessEvidence: "unknown"
-  }));
   const targets = semanticTargets(database);
   const capabilityCandidates = tools
     .filter((tool) => tool.routeClass === "mcp" && tool.calls >= 5
@@ -188,12 +220,76 @@ export function buildReport(database, options = {}, nowMs = Date.now()) {
       calls: tool.calls,
       signal: "candidate-for-capability-contract",
       basis: "repeated-unmapped-mcp-use",
-      correctnessEvidence: "unknown"
+      correctnessStatus: "unknown"
     }));
   const procedureCandidates = sequenceCandidates(
     toolSequenceEvents(database, cutoffMs, options.openAdamOnly === true)
   );
+  const semanticExecutions = semanticExecutionReportRows(database, cutoffMs).map((row) => ({
+    target: row.target_kind === "capability" ? {
+      kind: "capability",
+      capabilityId: row.semantic_id,
+      capabilityVersion: row.semantic_version,
+      operationId: row.operation_id
+    } : row.target_kind === "procedure" ? {
+      kind: "procedure",
+      procedureId: row.semantic_id,
+      procedureVersion: row.semantic_version
+    } : {
+      kind: "mcp-tool",
+      toolName: row.tool_name
+    },
+    providerId: row.provider_id,
+    providerVersion: row.provider_version,
+    transport: row.transport,
+    lifecycle: row.lifecycle,
+    executions: Number(row.executions),
+    runtime: {
+      completed: Number(row.completed),
+      providerErrors: Number(row.provider_errors),
+      hostErrors: Number(row.host_errors),
+      averageDurationMs: numeric(row.average_duration_ms),
+      averageQueueMs: numeric(row.average_queue_ms),
+      averageProviderRoundTripMs: numeric(row.average_provider_round_trip_ms)
+    },
+    payload: {
+      requestBytes: numeric(row.request_bytes),
+      responseBytes: numeric(row.response_bytes)
+    },
+    executionCost: {
+      modelCalls: 0,
+      tokenUsage: null,
+      monetaryCost: null,
+      externalCostStatus: "not_observed"
+    },
+    firstObservedAtMs: numeric(row.first_observed_at_ms),
+    lastObservedAtMs: numeric(row.last_observed_at_ms),
+    observationBasis: "direct-runtime-metadata-event",
+    correctnessStatus: "unknown"
+  }));
+  const directHealth = directRuntimeHealth(database);
+  const contextSurfaces = latestContextSurfaceRows(database).map((row) => ({
+    source: { id: row.source_id, revision: row.source_revision },
+    importedAtMs: Number(row.imported_at_ms),
+    snapshot: { sha256: row.snapshot_sha256, canonicalUtf8Bytes: Number(row.snapshot_bytes) },
+    catalog: {
+      sha256: row.catalog_sha256,
+      canonicalUtf8Bytes: Number(row.catalog_bytes),
+      largestToolUtf8Bytes: Number(row.largest_tool_bytes)
+    },
+    counts: {
+      tools: Number(row.tool_count),
+      schemas: Number(row.schema_count),
+      describedTools: Number(row.described_tool_count),
+      duplicateSchemas: Number(row.duplicate_schema_count),
+      hardNameCollisions: Number(row.hard_name_collision_count)
+    },
+    tokenMeasurements: JSON.parse(row.token_measurements_json),
+    measurementBasis: "explicit-context-surface-analysis-import",
+    currentInstalledBindingStatus: "not_assessed"
+  }));
   return {
+    schemaVersion: REPORT_SCHEMA_VERSION,
     generatedAtMs: nowMs,
     windowDays: days,
     filter: options.openAdamOnly ? "openadam" : "all-tools",
@@ -205,9 +301,42 @@ export function buildReport(database, options = {}, nowMs = Date.now()) {
     })),
     tools,
     usage,
+    cost: {
+      dynamicPayloadBytes: {
+        status: tools.some((tool) => tool.payload.requestBytesMeasuredCalls > 0
+          || tool.payload.responseBytesMeasuredCalls > 0) ? "partial" : "unavailable",
+        contentStored: false
+      },
+      tokenAssociation: {
+        status: tools.some((tool) => tool.turnAssociatedUsage.usageRecords > 0) ? "partial" : "unavailable",
+        allocation: "shared-turn-not-attributed-to-one-tool"
+      },
+      staticContext: {
+        status: contextSurfaces.length > 0 ? "explicit-snapshots-imported" : "unavailable",
+        installedCatalogAcquisition: "outside-observer"
+      },
+      monetary: {
+        status: "unavailable",
+        reason: "model-and-pricing-identity-not-observed-at-tool-call-granularity"
+      }
+    },
     procedures,
     capabilities,
-    humanCheckpoints,
+    semanticExecutions,
+    directRuntime: directHealth ? {
+      status: directHealth.status,
+      errorCode: directHealth.error_code,
+      scannedAtMs: Number(directHealth.scanned_at_ms),
+      filesSeen: Number(directHealth.files_seen),
+      eventsWritten: Number(directHealth.events_written)
+    } : {
+      status: "not-collected",
+      errorCode: null,
+      scannedAtMs: null,
+      filesSeen: 0,
+      eventsWritten: 0
+    },
+    contextSurfaces,
     portfolio: {
       fixCandidates: tools.filter((tool) => tool.signal === "fix-candidate").map((tool) => ({
         provider: tool.provider,
@@ -218,7 +347,7 @@ export function buildReport(database, options = {}, nowMs = Date.now()) {
       procedureCandidates,
       weakenRoutingCandidates: [],
       retireCandidates: [],
-      claimBoundary: "Receipts establish declared execution and binding identity, while passive repetition only nominates contract or Procedure evaluations; neither establishes correctness, opportunity, natural routing, redundancy, or retirement."
+      claimBoundary: "Legacy receipts record declared execution and binding identity; Direct Runtime events record metadata about actual direct execution; imported Context Surface analyses measure explicit snapshots; passive repetition only nominates evaluations. None establishes correctness, opportunity, natural routing, redundancy, retirement, current installed binding, cost attribution, or authorization."
     },
     privacy: {
       rawContentStored: false,
@@ -251,9 +380,11 @@ export function renderReport(report) {
   lines.push(
     "",
     `Fix candidates: ${report.portfolio.fixCandidates.length}`,
-    `Semantic receipts: ${(report.procedures ?? []).length} Procedure implementations, ${(report.capabilities ?? []).length} Capability bindings, ${(report.humanCheckpoints ?? []).length} human checkpoints`,
+    `Legacy semantic receipts: ${(report.procedures ?? []).length} Procedure implementations, ${(report.capabilities ?? []).length} Capability bindings (human-checkpoint fields discarded on read)`,
+    `Direct semantic execution groups: ${(report.semanticExecutions ?? []).length}; source=${report.directRuntime?.status ?? "not-collected"}`,
+    `Static context snapshots: ${(report.contextSurfaces ?? []).length}; monetary cost=${report.cost?.monetary?.status ?? "unavailable"}`,
     `Discovery candidates: ${(report.portfolio.capabilityCandidates ?? []).length} Capability contracts, ${(report.portfolio.procedureCandidates ?? []).length} Procedure evaluations`,
-    "Routing/retirement: insufficient evidence until opportunity and comparable-route data exist.",
+    "Routing/retirement: insufficient data until opportunity and comparable-route observations exist.",
     "Privacy: metadata only, no source paths or raw content, no network, no model calls."
   );
   return `${lines.join("\n")}\n`;

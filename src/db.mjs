@@ -5,7 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { classifyTool } from "./core/classify.mjs";
 import { ObserverError } from "./errors.mjs";
 
-const SCHEMA_VERSION = "8";
+const SCHEMA_VERSION = "10";
 
 const SCHEMA_SQL = `
 PRAGMA foreign_keys = ON;
@@ -54,6 +54,8 @@ CREATE TABLE IF NOT EXISTS tool_event (
   status TEXT NOT NULL CHECK (status IN ('observed', 'completed', 'error', 'cancelled', 'unknown')),
   duration_ms REAL CHECK (duration_ms IS NULL OR duration_ms >= 0),
   retry_count INTEGER CHECK (retry_count IS NULL OR retry_count >= 0),
+  request_bytes INTEGER CHECK (request_bytes IS NULL OR request_bytes >= 0),
+  response_bytes INTEGER CHECK (response_bytes IS NULL OR response_bytes >= 0),
   source_format TEXT NOT NULL CHECK (length(source_format) BETWEEN 1 AND 64),
   recorded_at_ms INTEGER NOT NULL CHECK (recorded_at_ms >= 0)
 ) STRICT;
@@ -128,24 +130,85 @@ CREATE INDEX IF NOT EXISTS capability_event_time_idx ON capability_event(complet
 CREATE INDEX IF NOT EXISTS capability_event_capability_idx ON capability_event(capability_id, operation_id, completed_at_ms);
 CREATE INDEX IF NOT EXISTS capability_event_target_idx ON capability_event(target);
 
-CREATE TABLE IF NOT EXISTS human_checkpoint_event (
-  event_id TEXT PRIMARY KEY CHECK (length(event_id) = 64),
-  procedure_event_id TEXT NOT NULL REFERENCES procedure_event(event_id) ON DELETE CASCADE,
-  stage_index INTEGER NOT NULL CHECK (stage_index BETWEEN 0 AND 63),
-  stage_id TEXT NOT NULL CHECK (length(stage_id) BETWEEN 1 AND 160),
-  status TEXT NOT NULL CHECK (status IN ('pending', 'accepted', 'rejected', 'skipped')),
-  authority TEXT NOT NULL CHECK (authority = 'human'),
-  decision_source TEXT CHECK (decision_source IS NULL OR decision_source = 'human'),
-  duration_ms INTEGER NOT NULL CHECK (duration_ms BETWEEN 0 AND 86400000),
-  completed_at_ms INTEGER NOT NULL CHECK (completed_at_ms >= 0),
-  recorded_at_ms INTEGER NOT NULL CHECK (recorded_at_ms >= 0),
-  UNIQUE(procedure_event_id, stage_index)
+CREATE TABLE IF NOT EXISTS direct_runtime_cursor (
+  source_id TEXT PRIMARY KEY CHECK (length(source_id) = 64),
+  file_identity TEXT NOT NULL,
+  offset_bytes INTEGER NOT NULL CHECK (offset_bytes >= 0),
+  size_bytes INTEGER NOT NULL CHECK (size_bytes >= 0),
+  mtime_ms INTEGER NOT NULL CHECK (mtime_ms >= 0),
+  discarding_line INTEGER NOT NULL DEFAULT 0 CHECK (discarding_line IN (0, 1)),
+  skipped_lines INTEGER NOT NULL DEFAULT 0 CHECK (skipped_lines >= 0),
+  updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms >= 0)
 ) STRICT;
 
-CREATE INDEX IF NOT EXISTS human_checkpoint_event_time_idx
-  ON human_checkpoint_event(completed_at_ms);
-CREATE INDEX IF NOT EXISTS human_checkpoint_event_stage_idx
-  ON human_checkpoint_event(stage_id, completed_at_ms);
+CREATE TABLE IF NOT EXISTS direct_runtime_health (
+  source TEXT PRIMARY KEY CHECK (source = 'direct-runtime'),
+  status TEXT NOT NULL CHECK (status IN ('ok', 'partial', 'missing', 'error', 'disabled')),
+  error_code TEXT,
+  files_seen INTEGER NOT NULL DEFAULT 0 CHECK (files_seen >= 0),
+  files_read INTEGER NOT NULL DEFAULT 0 CHECK (files_read >= 0),
+  bytes_read INTEGER NOT NULL DEFAULT 0 CHECK (bytes_read >= 0),
+  lines_read INTEGER NOT NULL DEFAULT 0 CHECK (lines_read >= 0),
+  events_written INTEGER NOT NULL DEFAULT 0 CHECK (events_written >= 0),
+  skipped_lines INTEGER NOT NULL DEFAULT 0 CHECK (skipped_lines >= 0),
+  backlog_sources INTEGER NOT NULL DEFAULT 0 CHECK (backlog_sources >= 0),
+  scanned_at_ms INTEGER NOT NULL CHECK (scanned_at_ms >= 0)
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS semantic_execution_event (
+  event_id TEXT PRIMARY KEY CHECK (length(event_id) = 64),
+  source_id TEXT NOT NULL CHECK (length(source_id) = 64),
+  work_order_hash TEXT NOT NULL CHECK (length(work_order_hash) = 71),
+  call_hash TEXT NOT NULL CHECK (length(call_hash) = 71),
+  occurred_at_ms INTEGER NOT NULL CHECK (occurred_at_ms >= 0),
+  completed_at_ms INTEGER NOT NULL CHECK (completed_at_ms >= occurred_at_ms),
+  target_kind TEXT NOT NULL CHECK (target_kind IN ('capability', 'procedure', 'mcp-tool')),
+  semantic_id TEXT CHECK (semantic_id IS NULL OR length(semantic_id) BETWEEN 1 AND 200),
+  semantic_version TEXT CHECK (semantic_version IS NULL OR length(semantic_version) BETWEEN 1 AND 100),
+  operation_id TEXT CHECK (operation_id IS NULL OR length(operation_id) BETWEEN 1 AND 200),
+  tool_name TEXT CHECK (tool_name IS NULL OR length(tool_name) BETWEEN 1 AND 200),
+  provider_id TEXT NOT NULL CHECK (length(provider_id) BETWEEN 1 AND 200),
+  provider_version TEXT CHECK (provider_version IS NULL OR length(provider_version) BETWEEN 1 AND 100),
+  transport TEXT NOT NULL CHECK (transport IN ('capability-jsonl-v0.1', 'procedure-jsonl-v0.2', 'mcp-stdio')),
+  lifecycle TEXT NOT NULL CHECK (lifecycle IN ('persistent', 'per-call')),
+  status TEXT NOT NULL CHECK (status IN ('ok', 'provider_error', 'host_error')),
+  error_code TEXT CHECK (error_code IS NULL OR length(error_code) BETWEEN 1 AND 160),
+  duration_ms REAL NOT NULL CHECK (duration_ms >= 0),
+  queue_ms REAL CHECK (queue_ms IS NULL OR queue_ms >= 0),
+  provider_round_trip_ms REAL CHECK (provider_round_trip_ms IS NULL OR provider_round_trip_ms >= 0),
+  request_bytes INTEGER NOT NULL CHECK (request_bytes >= 0),
+  response_bytes INTEGER CHECK (response_bytes IS NULL OR response_bytes >= 0),
+  session_state TEXT CHECK (session_state IS NULL OR session_state IN ('cold', 'warm')),
+  binding_digest TEXT CHECK (binding_digest IS NULL OR length(binding_digest) = 71),
+  contract_digest TEXT CHECK (contract_digest IS NULL OR length(contract_digest) = 71),
+  source_format TEXT NOT NULL CHECK (source_format = 'openadam.direct-execution-observation.v0.1'),
+  recorded_at_ms INTEGER NOT NULL CHECK (recorded_at_ms >= 0)
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS semantic_execution_time_idx ON semantic_execution_event(completed_at_ms);
+CREATE INDEX IF NOT EXISTS semantic_execution_target_idx ON semantic_execution_event(target_kind, semantic_id, operation_id, completed_at_ms);
+CREATE INDEX IF NOT EXISTS semantic_execution_provider_idx ON semantic_execution_event(provider_id, completed_at_ms);
+
+CREATE TABLE IF NOT EXISTS context_surface_measurement (
+  measurement_id TEXT PRIMARY KEY CHECK (length(measurement_id) = 64),
+  source_id TEXT NOT NULL CHECK (length(source_id) BETWEEN 1 AND 200),
+  source_revision TEXT NOT NULL CHECK (length(source_revision) BETWEEN 1 AND 200),
+  snapshot_sha256 TEXT NOT NULL CHECK (length(snapshot_sha256) = 64),
+  snapshot_bytes INTEGER NOT NULL CHECK (snapshot_bytes >= 0),
+  catalog_sha256 TEXT NOT NULL CHECK (length(catalog_sha256) = 64),
+  catalog_bytes INTEGER NOT NULL CHECK (catalog_bytes >= 0),
+  largest_tool_bytes INTEGER NOT NULL CHECK (largest_tool_bytes >= 0),
+  tool_count INTEGER NOT NULL CHECK (tool_count >= 0),
+  schema_count INTEGER NOT NULL CHECK (schema_count >= 0),
+  described_tool_count INTEGER NOT NULL CHECK (described_tool_count >= 0),
+  duplicate_schema_count INTEGER NOT NULL CHECK (duplicate_schema_count >= 0),
+  hard_name_collision_count INTEGER NOT NULL CHECK (hard_name_collision_count >= 0),
+  token_measurements_json TEXT NOT NULL CHECK (length(token_measurements_json) BETWEEN 2 AND 65536),
+  source_format TEXT NOT NULL CHECK (source_format = 'context-surface.analysis.v0.1'),
+  imported_at_ms INTEGER NOT NULL CHECK (imported_at_ms >= 0)
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS context_surface_source_idx ON context_surface_measurement(source_id, imported_at_ms);
 
 CREATE TABLE IF NOT EXISTS provider_health (
   provider TEXT PRIMARY KEY CHECK (provider IN ('codex', 'claude', 'zcode')),
@@ -222,9 +285,15 @@ export function openStateDatabase(config) {
   const storedVersion = database.prepare("SELECT value FROM metadata WHERE key = 'schema_version'").get()?.value;
   if (storedVersion === undefined) {
     database.prepare("INSERT INTO metadata(key, value) VALUES ('schema_version', ?)").run(SCHEMA_VERSION);
-  } else if (["1", "2", "3", "4", "5", "6", "7"].includes(storedVersion)) {
+  } else if (["1", "2", "3", "4", "5", "6", "7", "8", "9"].includes(storedVersion)) {
     database.exec("BEGIN IMMEDIATE");
     try {
+      if (storedVersion === "8") {
+        // The portable human-checkpoint machinery was removed from the
+        // standards on 2026-08-23; legacy v0.2 checkpoint fields are now
+        // read-and-discard, so the persisted approval-state table is dropped.
+        database.exec("DROP TABLE IF EXISTS human_checkpoint_event");
+      }
       const checkpointColumns = new Set(
         database.prepare("PRAGMA table_info(provider_checkpoint)").all().map((row) => row.name)
       );
@@ -245,12 +314,24 @@ export function openStateDatabase(config) {
         `);
         database.prepare("UPDATE procedure_event SET receipt_outcome = outcome").run();
       }
+      const toolColumns = new Set(
+        database.prepare("PRAGMA table_info(tool_event)").all().map((row) => row.name)
+      );
+      if (!toolColumns.has("request_bytes")) {
+        database.exec(`
+          ALTER TABLE tool_event
+          ADD COLUMN request_bytes INTEGER CHECK (request_bytes IS NULL OR request_bytes >= 0);
+          ALTER TABLE tool_event
+          ADD COLUMN response_bytes INTEGER CHECK (response_bytes IS NULL OR response_bytes >= 0);
+        `);
+      }
       if (["1", "2", "3"].includes(storedVersion)) {
         database.prepare("DELETE FROM tool_event WHERE provider = 'codex'").run();
         database.prepare("DELETE FROM usage_event WHERE provider = 'codex'").run();
         database.prepare("DELETE FROM source_cursor WHERE provider = 'codex'").run();
       }
       reclassifyStoredTools(database);
+      database.exec(SCHEMA_SQL);
       database.prepare("UPDATE metadata SET value = ? WHERE key = 'schema_version'").run(SCHEMA_VERSION);
       database.exec("COMMIT");
     } catch (error) {
@@ -368,9 +449,9 @@ export function putToolEvent(database, event) {
     INSERT INTO tool_event(
       event_id, provider, source_id, session_hash, turn_hash, call_hash,
       occurred_at_ms, completed_at_ms, tool_name, tool_namespace, route_class,
-      is_openadam, derived, status, duration_ms, retry_count, source_format,
-      recorded_at_ms
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      is_openadam, derived, status, duration_ms, retry_count, request_bytes,
+      response_bytes, source_format, recorded_at_ms
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(event_id) DO UPDATE SET
       tool_namespace = excluded.tool_namespace,
       route_class = excluded.route_class,
@@ -382,6 +463,8 @@ export function putToolEvent(database, event) {
       END,
       duration_ms = COALESCE(excluded.duration_ms, tool_event.duration_ms),
       retry_count = COALESCE(excluded.retry_count, tool_event.retry_count),
+      request_bytes = COALESCE(excluded.request_bytes, tool_event.request_bytes),
+      response_bytes = COALESCE(excluded.response_bytes, tool_event.response_bytes),
       recorded_at_ms = excluded.recorded_at_ms
     WHERE
       excluded.tool_namespace IS NOT tool_event.tool_namespace
@@ -391,6 +474,8 @@ export function putToolEvent(database, event) {
       OR (excluded.status IN ('completed', 'error', 'cancelled') AND excluded.status IS NOT tool_event.status)
       OR (excluded.duration_ms IS NOT NULL AND excluded.duration_ms IS NOT tool_event.duration_ms)
       OR (excluded.retry_count IS NOT NULL AND excluded.retry_count IS NOT tool_event.retry_count)
+      OR (excluded.request_bytes IS NOT NULL AND excluded.request_bytes IS NOT tool_event.request_bytes)
+      OR (excluded.response_bytes IS NOT NULL AND excluded.response_bytes IS NOT tool_event.response_bytes)
   `).run(
     event.eventId,
     event.provider,
@@ -408,13 +493,15 @@ export function putToolEvent(database, event) {
     event.status,
     event.durationMs ?? null,
     event.retryCount ?? null,
+    event.requestBytes ?? null,
+    event.responseBytes ?? null,
     event.sourceFormat,
     event.recordedAtMs
   );
   return result.changes > 0 ? 1 : 0;
 }
 
-export function completeToolEvent(database, eventId, status, completedAtMs) {
+export function completeToolEvent(database, eventId, status, completedAtMs, responseBytes = null) {
   const result = database.prepare(`
     UPDATE tool_event SET
       completed_at_ms = ?,
@@ -423,9 +510,151 @@ export function completeToolEvent(database, eventId, status, completedAtMs) {
         WHEN occurred_at_ms IS NOT NULL AND ? >= occurred_at_ms THEN ? - occurred_at_ms
         ELSE duration_ms
       END,
+      response_bytes = COALESCE(?, response_bytes),
       recorded_at_ms = ?
-    WHERE event_id = ? AND (completed_at_ms IS NOT ? OR status IS NOT ?)
-  `).run(completedAtMs, status, completedAtMs, completedAtMs, Date.now(), eventId, completedAtMs, status);
+    WHERE event_id = ? AND (
+      completed_at_ms IS NOT ? OR status IS NOT ?
+      OR (? IS NOT NULL AND response_bytes IS NOT ?)
+    )
+  `).run(
+    completedAtMs, status, completedAtMs, completedAtMs, responseBytes,
+    Date.now(), eventId, completedAtMs, status, responseBytes, responseBytes
+  );
+  return result.changes > 0 ? 1 : 0;
+}
+
+export function getDirectRuntimeCursor(database, sourceId) {
+  return database.prepare("SELECT * FROM direct_runtime_cursor WHERE source_id = ?").get(sourceId) ?? null;
+}
+
+export function putDirectRuntimeCursor(database, cursor) {
+  database.prepare(`
+    INSERT INTO direct_runtime_cursor(
+      source_id, file_identity, offset_bytes, size_bytes, mtime_ms,
+      discarding_line, skipped_lines, updated_at_ms
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(source_id) DO UPDATE SET
+      file_identity = excluded.file_identity,
+      offset_bytes = excluded.offset_bytes,
+      size_bytes = excluded.size_bytes,
+      mtime_ms = excluded.mtime_ms,
+      discarding_line = excluded.discarding_line,
+      skipped_lines = direct_runtime_cursor.skipped_lines + excluded.skipped_lines,
+      updated_at_ms = excluded.updated_at_ms
+  `).run(
+    cursor.sourceId,
+    cursor.fileIdentity,
+    cursor.offsetBytes,
+    cursor.sizeBytes,
+    Math.max(0, Math.round(cursor.mtimeMs)),
+    cursor.discardingLine ? 1 : 0,
+    cursor.skippedLines,
+    cursor.updatedAtMs
+  );
+}
+
+export function putDirectRuntimeHealth(database, health) {
+  database.prepare(`
+    INSERT INTO direct_runtime_health(
+      source, status, error_code, files_seen, files_read, bytes_read,
+      lines_read, events_written, skipped_lines, backlog_sources, scanned_at_ms
+    ) VALUES ('direct-runtime', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(source) DO UPDATE SET
+      status = excluded.status,
+      error_code = excluded.error_code,
+      files_seen = excluded.files_seen,
+      files_read = excluded.files_read,
+      bytes_read = excluded.bytes_read,
+      lines_read = excluded.lines_read,
+      events_written = excluded.events_written,
+      skipped_lines = excluded.skipped_lines,
+      backlog_sources = excluded.backlog_sources,
+      scanned_at_ms = excluded.scanned_at_ms
+  `).run(
+    health.status,
+    health.errorCode ?? null,
+    health.filesSeen ?? 0,
+    health.filesRead ?? 0,
+    health.bytesRead ?? 0,
+    health.linesRead ?? 0,
+    health.eventsWritten ?? 0,
+    health.skippedLines ?? 0,
+    health.backlogSources ?? 0,
+    health.scannedAtMs
+  );
+}
+
+export function putSemanticExecutionEvent(database, event) {
+  const result = database.prepare(`
+    INSERT INTO semantic_execution_event(
+      event_id, source_id, work_order_hash, call_hash, occurred_at_ms,
+      completed_at_ms, target_kind, semantic_id, semantic_version,
+      operation_id, tool_name, provider_id, provider_version, transport,
+      lifecycle, status, error_code, duration_ms, queue_ms,
+      provider_round_trip_ms, request_bytes, response_bytes, session_state,
+      binding_digest, contract_digest, source_format, recorded_at_ms
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(event_id) DO NOTHING
+  `).run(
+    event.eventId,
+    event.sourceId,
+    event.workOrderHash,
+    event.callHash,
+    event.occurredAtMs,
+    event.completedAtMs,
+    event.targetKind,
+    event.semanticId ?? null,
+    event.semanticVersion ?? null,
+    event.operationId ?? null,
+    event.toolName ?? null,
+    event.providerId,
+    event.providerVersion ?? null,
+    event.transport,
+    event.lifecycle,
+    event.status,
+    event.errorCode ?? null,
+    event.durationMs,
+    event.queueMs ?? null,
+    event.providerRoundTripMs ?? null,
+    event.requestBytes,
+    event.responseBytes ?? null,
+    event.sessionState ?? null,
+    event.bindingDigest ?? null,
+    event.contractDigest ?? null,
+    event.sourceFormat,
+    event.recordedAtMs
+  );
+  return result.changes > 0 ? 1 : 0;
+}
+
+export function putContextSurfaceMeasurement(database, measurement) {
+  const result = database.prepare(`
+    INSERT INTO context_surface_measurement(
+      measurement_id, source_id, source_revision, snapshot_sha256,
+      snapshot_bytes, catalog_sha256, catalog_bytes, largest_tool_bytes,
+      tool_count, schema_count, described_tool_count, duplicate_schema_count,
+      hard_name_collision_count, token_measurements_json, source_format,
+      imported_at_ms
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(measurement_id) DO NOTHING
+  `).run(
+    measurement.measurementId,
+    measurement.sourceId,
+    measurement.sourceRevision,
+    measurement.snapshotSha256,
+    measurement.snapshotBytes,
+    measurement.catalogSha256,
+    measurement.catalogBytes,
+    measurement.largestToolBytes,
+    measurement.toolCount,
+    measurement.schemaCount,
+    measurement.describedToolCount,
+    measurement.duplicateSchemaCount,
+    measurement.hardNameCollisionCount,
+    JSON.stringify(measurement.tokenMeasurements),
+    measurement.sourceFormat,
+    measurement.importedAtMs
+  );
   return result.changes > 0 ? 1 : 0;
 }
 
@@ -500,7 +729,6 @@ export function putProcedureReceipt(database, receipt, recordedAtMs = Date.now()
       recordedAtMs
     );
     let stagesWritten = 0;
-    let checkpointsWritten = 0;
     if (procedure.changes > 0) {
       const insertStage = database.prepare(`
         INSERT INTO capability_event(
@@ -510,29 +738,7 @@ export function putProcedureReceipt(database, receipt, recordedAtMs = Date.now()
           completed_at_ms, recorded_at_ms
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
-      const insertCheckpoint = database.prepare(`
-        INSERT INTO human_checkpoint_event(
-          event_id, procedure_event_id, stage_index, stage_id, status,
-          authority, decision_source, duration_ms, completed_at_ms, recorded_at_ms
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `);
       for (const stage of receipt.stages) {
-        if (stage.kind === "human-checkpoint") {
-          insertCheckpoint.run(
-            stage.eventId,
-            receipt.eventId,
-            stage.index,
-            stage.stageId,
-            stage.status,
-            stage.authority,
-            stage.decisionSource,
-            stage.durationMs,
-            receipt.completedAtMs,
-            recordedAtMs
-          );
-          checkpointsWritten += 1;
-          continue;
-        }
         insertStage.run(
           stage.eventId,
           receipt.eventId,
@@ -558,8 +764,7 @@ export function putProcedureReceipt(database, receipt, recordedAtMs = Date.now()
     database.exec("COMMIT");
     return {
       proceduresWritten: procedure.changes > 0 ? 1 : 0,
-      stagesWritten,
-      checkpointsWritten
+      stagesWritten
     };
   } catch (error) {
     if (database.isTransaction) database.exec("ROLLBACK");

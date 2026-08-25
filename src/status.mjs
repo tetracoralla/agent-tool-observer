@@ -1,6 +1,7 @@
-import { databaseStats, latestCollection, providerHealth } from "./db-read.mjs";
+import { databaseStats, directRuntimeHealth, latestCollection, providerHealth } from "./db-read.mjs";
 
 export function buildStatus(database, config) {
+  const directRuntime = directRuntimeHealth(database);
   return {
     state: databaseStats(database),
     latestCollection: latestCollection(database),
@@ -17,6 +18,19 @@ export function buildStatus(database, config) {
       backlogSources: Number(row.backlog_sources),
       scannedAtMs: Number(row.scanned_at_ms)
     })),
+    semanticSources: directRuntime ? [{
+      source: directRuntime.source,
+      status: directRuntime.status,
+      errorCode: directRuntime.error_code,
+      filesSeen: Number(directRuntime.files_seen),
+      filesRead: Number(directRuntime.files_read),
+      bytesRead: Number(directRuntime.bytes_read),
+      linesRead: Number(directRuntime.lines_read),
+      eventsWritten: Number(directRuntime.events_written),
+      skippedLines: Number(directRuntime.skipped_lines),
+      backlogSources: Number(directRuntime.backlog_sources),
+      scannedAtMs: Number(directRuntime.scanned_at_ms)
+    }] : [],
     automaticIntervalSeconds: 300,
     databasePath: config.databasePath,
     privacy: { rawContentStored: false, sourcePathsStored: false, networkUsed: false, modelCalls: 0 }
@@ -30,6 +44,9 @@ export function renderStatus(status) {
   ];
   for (const provider of status.providers) {
     lines.push(`${provider.provider}: ${provider.status}${provider.errorCode ? ` (${provider.errorCode})` : ""}`);
+  }
+  for (const source of status.semanticSources ?? []) {
+    lines.push(`${source.source}: ${source.status}${source.errorCode ? ` (${source.errorCode})` : ""}`);
   }
   lines.push("Privacy: metadata only; no source paths/raw content; no network/model calls.");
   return `${lines.join("\n")}\n`;

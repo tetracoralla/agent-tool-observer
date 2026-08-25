@@ -1,6 +1,7 @@
 import {
   acquireLease,
   finishCollectionRun,
+  putDirectRuntimeHealth,
   putProviderHealth,
   releaseLease,
   startCollectionRun
@@ -9,6 +10,7 @@ import { stableErrorCode } from "./errors.mjs";
 import { scanClaude } from "./providers/claude.mjs";
 import { scanCodex } from "./providers/codex.mjs";
 import { scanZcode } from "./providers/zcode.mjs";
+import { scanDirectRuntime } from "./providers/direct-runtime.mjs";
 
 const PROVIDERS = ["codex", "claude", "zcode"];
 
@@ -113,7 +115,25 @@ export function collect(database, config, nowMs = Date.now()) {
       putProviderHealth(database, providerHealth);
       health.push(providerHealth);
     }
+    let directRuntimeHealth;
+    if (config.disabledProviders.has("direct-runtime")) {
+      directRuntimeHealth = {
+        ...disabledHealth("direct-runtime", nowMs),
+        source: "direct-runtime"
+      };
+    } else {
+      try {
+        directRuntimeHealth = scanDirectRuntime({ database, config, scannedAtMs: nowMs, deadlineMs });
+      } catch (error) {
+        directRuntimeHealth = {
+          ...failedHealth("direct-runtime", nowMs, error),
+          source: "direct-runtime"
+        };
+      }
+    }
+    putDirectRuntimeHealth(database, directRuntimeHealth);
     const summary = summarizeHealth(health);
+    summary.eventsWritten += directRuntimeHealth.eventsWritten;
     const completedAtMs = Date.now();
     finishCollectionRun(database, runId, { ...summary, completedAtMs });
     return {
@@ -122,6 +142,7 @@ export function collect(database, config, nowMs = Date.now()) {
       startedAtMs: nowMs,
       completedAtMs,
       providers: health,
+      semanticSources: [directRuntimeHealth],
       rawContentStored: false,
       networkUsed: false,
       modelCalls: 0
