@@ -96,6 +96,16 @@ function normalizeTarget(target) {
       toolName: identifier(target.toolName, "toolName")
     };
   }
+  if (target?.kind === "mcp-operation") {
+    exactKeys(target, new Set(["kind", "toolName", "operationId"]), "target");
+    return {
+      targetKind: "mcp-operation",
+      semanticId: null,
+      semanticVersion: null,
+      operationId: identifier(target.operationId, "operationId"),
+      toolName: identifier(target.toolName, "toolName")
+    };
+  }
   throw new ObserverError("DIRECT_OBSERVATION_INVALID", "target kind is invalid");
 }
 

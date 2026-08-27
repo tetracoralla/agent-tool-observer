@@ -23,7 +23,9 @@
 8. Direct Runtime input is an exact owner-only regular JSONL file. Events use a
    closed versioned schema and contain only hashed execution identity, semantic
    target/provider identity, state, timing, digests, session state, and numeric
-   payload sizes. Unknown fields or versions fail closed before cursor advance.
+   payload sizes. A projected MCP target retains both tool and operation id;
+   schema migration preserves earlier semantic rows. Unknown fields or versions
+   fail closed before cursor advance.
 9. Context Surface input is one explicit bounded Analyzer result. Tool catalog,
    descriptions, and schemas are not persisted, and import never claims the
    snapshot matches the current installed host.
@@ -103,7 +105,8 @@
 - schema/privacy and network-import contract checks;
 - CLI smoke with fixture providers;
 - Direct Runtime success, provider error, host error, sink failure, schema
-  drift, privacy, payload-byte, and idempotency cases;
+  drift, projected-operation identity, schema migration, privacy, payload-byte,
+  and idempotency cases;
 - explicit Context Surface import, deduplication, and no-catalog-retention case;
 - wrapper/derived-sequence negative regression;
 - content-addressed installation immutability regression;

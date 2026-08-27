@@ -120,6 +120,10 @@ versioned semantic target and provider identity, binding/contract digests,
 terminal status and stable error code, timing, cold/warm session state, and
 numeric serialized payload sizes. The Runtime event declares zero model calls
 and leaves token and monetary cost null; the observer preserves that boundary.
+Provider-native MCP observations keep `mcp-tool` distinct from
+`mcp-operation`; the latter retains both carrier tool name and selected
+operation id. Schema v11 migrates existing semantic rows without changing
+their identities.
 
 Imported Context Surface analyses retain source ID/revision, snapshot and
 catalog digests, catalog/tool/schema byte counts, duplicate/collision counts,

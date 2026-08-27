@@ -5,7 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { classifyTool } from "./core/classify.mjs";
 import { ObserverError } from "./errors.mjs";
 
-const SCHEMA_VERSION = "10";
+const SCHEMA_VERSION = "11";
 
 const SCHEMA_SQL = `
 PRAGMA foreign_keys = ON;
@@ -162,7 +162,7 @@ CREATE TABLE IF NOT EXISTS semantic_execution_event (
   call_hash TEXT NOT NULL CHECK (length(call_hash) = 71),
   occurred_at_ms INTEGER NOT NULL CHECK (occurred_at_ms >= 0),
   completed_at_ms INTEGER NOT NULL CHECK (completed_at_ms >= occurred_at_ms),
-  target_kind TEXT NOT NULL CHECK (target_kind IN ('capability', 'procedure', 'mcp-tool')),
+  target_kind TEXT NOT NULL CHECK (target_kind IN ('capability', 'procedure', 'mcp-tool', 'mcp-operation')),
   semantic_id TEXT CHECK (semantic_id IS NULL OR length(semantic_id) BETWEEN 1 AND 200),
   semantic_version TEXT CHECK (semantic_version IS NULL OR length(semantic_version) BETWEEN 1 AND 100),
   operation_id TEXT CHECK (operation_id IS NULL OR length(operation_id) BETWEEN 1 AND 200),
@@ -268,6 +268,41 @@ function reclassifyStoredTools(database) {
   }
 }
 
+function migrateSemanticExecutionTargets(database) {
+  const table = database.prepare(`
+    SELECT sql FROM sqlite_master
+    WHERE type = 'table' AND name = 'semantic_execution_event'
+  `).get();
+  if (table === undefined || table.sql.includes("'mcp-operation'")) return;
+
+  database.exec(`
+    DROP INDEX IF EXISTS semantic_execution_time_idx;
+    DROP INDEX IF EXISTS semantic_execution_target_idx;
+    DROP INDEX IF EXISTS semantic_execution_provider_idx;
+    ALTER TABLE semantic_execution_event RENAME TO semantic_execution_event_legacy;
+  `);
+  database.exec(SCHEMA_SQL);
+  database.exec(`
+    INSERT INTO semantic_execution_event(
+      event_id, source_id, work_order_hash, call_hash, occurred_at_ms,
+      completed_at_ms, target_kind, semantic_id, semantic_version,
+      operation_id, tool_name, provider_id, provider_version, transport,
+      lifecycle, status, error_code, duration_ms, queue_ms,
+      provider_round_trip_ms, request_bytes, response_bytes, session_state,
+      binding_digest, contract_digest, source_format, recorded_at_ms
+    )
+    SELECT
+      event_id, source_id, work_order_hash, call_hash, occurred_at_ms,
+      completed_at_ms, target_kind, semantic_id, semantic_version,
+      operation_id, tool_name, provider_id, provider_version, transport,
+      lifecycle, status, error_code, duration_ms, queue_ms,
+      provider_round_trip_ms, request_bytes, response_bytes, session_state,
+      binding_digest, contract_digest, source_format, recorded_at_ms
+    FROM semantic_execution_event_legacy;
+    DROP TABLE semantic_execution_event_legacy;
+  `);
+}
+
 export function openStateDatabase(config) {
   ensureOwnerDirectory(config.stateDir);
   ensureOwnerDirectory(config.logsDir);
@@ -285,7 +320,7 @@ export function openStateDatabase(config) {
   const storedVersion = database.prepare("SELECT value FROM metadata WHERE key = 'schema_version'").get()?.value;
   if (storedVersion === undefined) {
     database.prepare("INSERT INTO metadata(key, value) VALUES ('schema_version', ?)").run(SCHEMA_VERSION);
-  } else if (["1", "2", "3", "4", "5", "6", "7", "8", "9"].includes(storedVersion)) {
+  } else if (["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"].includes(storedVersion)) {
     database.exec("BEGIN IMMEDIATE");
     try {
       if (storedVersion === "8") {
@@ -331,6 +366,7 @@ export function openStateDatabase(config) {
         database.prepare("DELETE FROM source_cursor WHERE provider = 'codex'").run();
       }
       reclassifyStoredTools(database);
+      migrateSemanticExecutionTargets(database);
       database.exec(SCHEMA_SQL);
       database.prepare("UPDATE metadata SET value = ? WHERE key = 'schema_version'").run(SCHEMA_VERSION);
       database.exec("COMMIT");

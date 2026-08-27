@@ -235,6 +235,10 @@ export function buildReport(database, options = {}, nowMs = Date.now()) {
       kind: "procedure",
       procedureId: row.semantic_id,
       procedureVersion: row.semantic_version
+    } : row.target_kind === "mcp-operation" ? {
+      kind: "mcp-operation",
+      toolName: row.tool_name,
+      operationId: row.operation_id
     } : {
       kind: "mcp-tool",
       toolName: row.tool_name

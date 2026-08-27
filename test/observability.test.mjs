@@ -73,6 +73,41 @@ test("Direct Runtime metadata is collected idempotently without work-order conte
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("Direct Runtime projected MCP operations retain carrier and operation identity", () => {
+  const root = temporaryRoot();
+  try {
+    const { config, paths } = fixtureConfig(root, { ATO_DISABLE_PROVIDERS: "codex,claude,zcode" });
+    writeJsonl(paths.directRuntime, [directObservation({
+      eventId: digest("f"),
+      target: {
+        kind: "mcp-operation",
+        toolName: "math.run",
+        operationId: "calculus.derivative"
+      },
+      provider: {
+        id: "io.github.tetracoralla.math-anchor",
+        version: "0.3.0",
+        transport: "mcp-stdio",
+        lifecycle: "persistent"
+      }
+    })]);
+    const database = openStateDatabase(config);
+    const collected = collect(database, config, 1_777_000_000_100);
+    assert.equal(collected.semanticSources[0].status, "ok");
+    assert.equal(collected.semanticSources[0].eventsWritten, 1);
+    const report = buildReport(database, { days: 1 }, 1_777_000_000_200);
+    assert.deepEqual(report.semanticExecutions[0].target, {
+      kind: "mcp-operation",
+      toolName: "math.run",
+      operationId: "calculus.derivative"
+    });
+    database.close();
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("Direct Runtime observation drift fails closed before cursor advancement", () => {
   const root = temporaryRoot();
   try {

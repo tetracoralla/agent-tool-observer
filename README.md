@@ -73,6 +73,10 @@ that fixed copy, so later edits to a development checkout cannot silently
 change scheduled collection. Reinstalling selects a new digest while retaining
 older copies for inspection or rollback.
 
+An embedding release may set `ATO_NODE_EXECUTABLE` to its own verified Node
+binary. The installer then binds the LaunchAgent to that exact executable and
+fails closed instead of falling back to another machine installation.
+
 The current report schema is
 `openadam.agent-tool-observer.report.v0.3`. Older report snapshots are rebuilt
 from the current database before they are returned.
@@ -89,6 +93,10 @@ from the current database before they are returned.
 - explicit Procedure Receipt files supplied to `ingest-receipts`.
 - explicit Context Surface analysis files supplied to
   `ingest-context-surface`.
+
+Direct Runtime targets retain the distinction between a whole MCP tool and one
+explicitly projected MCP operation, so reports do not erase the selected
+operation identity.
 
 Missing or changed providers are reported independently; one provider cannot
 silently make the others look healthy.

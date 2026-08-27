@@ -25,12 +25,10 @@ function assertRegularFile(filePath, code) {
   return fs.realpathSync(filePath);
 }
 
-function resolveStableNodePath() {
-  const candidates = [
-    "/opt/homebrew/opt/node@22/bin/node",
-    "/opt/homebrew/bin/node",
-    process.execPath
-  ];
+function resolveStableNodePath(explicitPath = process.env.ATO_NODE_EXECUTABLE) {
+  const candidates = explicitPath === undefined || explicitPath === ""
+    ? ["/opt/homebrew/opt/node@22/bin/node", "/opt/homebrew/bin/node", process.execPath]
+    : [explicitPath];
   for (const candidate of candidates) {
     if (!fs.existsSync(candidate)) continue;
     const resolved = fs.realpathSync(candidate);
@@ -243,7 +241,7 @@ function bootstrapLaunchAgent(domain, plistPath) {
 }
 
 export function installLaunchAgent(config, options = {}) {
-  const nodePath = resolveStableNodePath();
+  const nodePath = resolveStableNodePath(options.nodePath);
   const runtime = copyRuntimeBundle(config, { dryRun: options.dryRun });
   const cliPath = options.dryRun
     ? runtime.cliPath
@@ -323,4 +321,4 @@ export function purgeStateDirectory(config) {
   return { status: "purged", stateDir, removed: true };
 }
 
-export { copyRuntimeBundle, runtimeInventory };
+export { copyRuntimeBundle, resolveStableNodePath, runtimeInventory };
