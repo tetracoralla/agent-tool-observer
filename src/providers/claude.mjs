@@ -1,6 +1,6 @@
 import { nonNegativeInteger } from "../core/classify.mjs";
 import { eventIdentifier, hashIdentifier } from "../core/hash.mjs";
-import { completeToolEvent, putToolEvent, putUsageEvent } from "../db.mjs";
+import { applySessionStartObservation, completeToolEvent, putToolEvent, putUsageEvent } from "../db.mjs";
 import { jsonPayloadBytes, normalizedToolFields, scanJsonlProvider } from "./jsonl-provider.mjs";
 
 function timestampMs(value) {
@@ -10,11 +10,23 @@ function timestampMs(value) {
 
 function createClaudeParser({ database, sourceId, recordedAtMs }) {
   let writes = 0;
+  const sessionStarts = new Map();
   return {
     onRecord(record) {
       if (!record || typeof record !== "object") return;
       const sessionId = record.sessionId ?? sourceId;
       const occurredAtMs = timestampMs(record.timestamp);
+      const sessionHash = hashIdentifier("claude-session", sessionId);
+      const previousSessionStart = sessionStarts.get(sessionId) ?? null;
+      const sessionStartedAtMs = occurredAtMs === null
+        ? previousSessionStart
+        : previousSessionStart === null
+          ? occurredAtMs
+          : Math.min(previousSessionStart, occurredAtMs);
+      if (sessionStartedAtMs !== null && sessionStartedAtMs !== previousSessionStart) {
+        sessionStarts.set(sessionId, sessionStartedAtMs);
+        applySessionStartObservation(database, "claude", sessionHash, sessionStartedAtMs);
+      }
       const content = Array.isArray(record.message?.content) ? record.message.content : [];
       for (const item of content) {
         if (!item || typeof item !== "object") continue;
@@ -24,9 +36,10 @@ function createClaudeParser({ database, sourceId, recordedAtMs }) {
             eventId: eventIdentifier("claude", "tool", sessionId, item.id),
             provider: "claude",
             sourceId,
-            sessionHash: hashIdentifier("claude-session", sessionId),
+            sessionHash,
             turnHash: hashIdentifier("claude-turn", record.parentUuid ?? record.uuid),
             callHash: hashIdentifier("claude-call", item.id),
+            sessionStartedAtMs,
             occurredAtMs,
             completedAtMs: null,
             ...normalized,
@@ -65,7 +78,7 @@ function createClaudeParser({ database, sourceId, recordedAtMs }) {
       writes += putUsageEvent(database, {
         eventId: eventIdentifier("claude", "message-usage", sessionId, messageId),
         provider: "claude",
-        sessionHash: hashIdentifier("claude-session", sessionId),
+        sessionHash,
         turnHash: hashIdentifier("claude-turn", record.parentUuid ?? record.uuid),
         occurredAtMs,
         inputTokens,
@@ -91,6 +104,7 @@ export function scanClaude(options) {
     roots: options.config.claudeRoots,
     limits: options.config.limits,
     minimumMtimeMs: options.minimumMtimeMs,
+    primeFromStart: true,
     createParser: createClaudeParser
   });
 }

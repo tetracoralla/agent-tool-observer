@@ -4,8 +4,10 @@ import path from "node:path";
 import test from "node:test";
 import { collect } from "../src/collector.mjs";
 import { ingestContextSurfaceAnalysis } from "../src/context-surface.mjs";
+import { ingestAgentHostDeployment } from "../src/agent-host-deployment.mjs";
 import { openStateDatabase, putToolEvent } from "../src/db.mjs";
 import { buildReport } from "../src/report.mjs";
+import { maintainDatabase } from "../src/maintenance.mjs";
 import { fixtureConfig, temporaryRoot, writeJsonl } from "./helpers.mjs";
 
 function digest(character) {
@@ -73,6 +75,41 @@ test("Direct Runtime metadata is collected idempotently without work-order conte
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("Direct Runtime projected MCP operations retain carrier and operation identity", () => {
+  const root = temporaryRoot();
+  try {
+    const { config, paths } = fixtureConfig(root, { ATO_DISABLE_PROVIDERS: "codex,claude,zcode" });
+    writeJsonl(paths.directRuntime, [directObservation({
+      eventId: digest("f"),
+      target: {
+        kind: "mcp-operation",
+        toolName: "math.run",
+        operationId: "calculus.derivative"
+      },
+      provider: {
+        id: "io.github.tetracoralla.math-anchor",
+        version: "0.3.0",
+        transport: "mcp-stdio",
+        lifecycle: "persistent"
+      }
+    })]);
+    const database = openStateDatabase(config);
+    const collected = collect(database, config, 1_777_000_000_100);
+    assert.equal(collected.semanticSources[0].status, "ok");
+    assert.equal(collected.semanticSources[0].eventsWritten, 1);
+    const report = buildReport(database, { days: 1 }, 1_777_000_000_200);
+    assert.deepEqual(report.semanticExecutions[0].target, {
+      kind: "mcp-operation",
+      toolName: "math.run",
+      operationId: "calculus.derivative"
+    });
+    database.close();
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("Direct Runtime observation drift fails closed before cursor advancement", () => {
   const root = temporaryRoot();
   try {
@@ -135,6 +172,184 @@ test("Context Surface analysis import stores only bounded measurements and prove
   }
 });
 
+test("Agent Host deployment correlates the active immutable release without storing paths or task content", () => {
+  const root = temporaryRoot();
+  try {
+    const { config } = fixtureConfig(root);
+    const file = path.join(root, "deployment.json");
+    fs.writeFileSync(file, JSON.stringify({
+      schemaVersion: "openadam.agent-host-deployment-observation.v0.1",
+      observedAtMs: 2_000,
+      activatedAtMs: 1_000,
+      channel: "release",
+      releaseId: "release-3",
+      suiteVersion: "0.3.0",
+      profile: "local-dogfood",
+      components: [{
+        id: "math-anchor",
+        version: "0.4.0",
+        artifactSha256: "d".repeat(64),
+        toolNames: ["math.run"]
+      }],
+      context: {
+        sourceId: "agent-host:math-anchor",
+        sourceRevision: "release-3",
+        catalogSha256: "e".repeat(64),
+        catalogBytes: 321,
+        toolCount: 1
+      }
+    }), { mode: 0o600 });
+    const database = openStateDatabase(config);
+    assert.equal(ingestAgentHostDeployment(database, file).deploymentsWritten, 1);
+    const laterObservation = JSON.parse(fs.readFileSync(file, "utf8"));
+    laterObservation.observedAtMs = 2_500;
+    fs.writeFileSync(file, JSON.stringify(laterObservation), { mode: 0o600 });
+    assert.equal(ingestAgentHostDeployment(database, file).deploymentsWritten, 1);
+    assert.equal(database.prepare("SELECT count(*) AS n FROM agent_host_deployment_observation").get().n, 1);
+    assert.equal(database.prepare("SELECT observed_at_ms FROM agent_host_deployment_observation").get().observed_at_ms, 2_500);
+    putToolEvent(database, {
+      eventId: "release-call",
+      provider: "codex",
+      sessionHash: "fresh-session",
+      turnHash: "fresh-turn",
+      sessionStartedAtMs: 1_200,
+      occurredAtMs: 1_500,
+      toolName: "mcp__math_anchor__math_run",
+      toolNamespace: "math_anchor",
+      routeClass: "mcp",
+      isOpenAdam: true,
+      status: "completed",
+      sourceFormat: "test",
+      recordedAtMs: 1_500
+    });
+    putToolEvent(database, {
+      eventId: "preceding-shell",
+      provider: "codex",
+      sessionHash: "fresh-session",
+      turnHash: "fresh-turn",
+      sessionStartedAtMs: 1_200,
+      occurredAtMs: 1_400,
+      toolName: "exec",
+      routeClass: "orchestration",
+      isOpenAdam: false,
+      status: "completed",
+      sourceFormat: "test",
+      recordedAtMs: 1_400
+    });
+    putToolEvent(database, {
+      eventId: "ambiguous-release-call",
+      provider: "codex",
+      sessionHash: "old-session",
+      turnHash: "old-turn",
+      sessionStartedAtMs: 900,
+      occurredAtMs: 1_600,
+      toolName: "mcp__math_anchor__math_run",
+      toolNamespace: "math_anchor",
+      routeClass: "mcp",
+      isOpenAdam: true,
+      status: "completed",
+      sourceFormat: "test",
+      recordedAtMs: 1_600
+    });
+    putToolEvent(database, {
+      eventId: "suffix-collision",
+      provider: "codex",
+      sessionHash: "fresh-session",
+      turnHash: "different-turn",
+      sessionStartedAtMs: 1_200,
+      occurredAtMs: 1_700,
+      toolName: "mcp__unrelated__not_math_run",
+      toolNamespace: "unrelated",
+      routeClass: "mcp",
+      isOpenAdam: true,
+      status: "completed",
+      sourceFormat: "test",
+      recordedAtMs: 1_700
+    });
+    const report = buildReport(database, { days: 1 }, 3_000);
+    assert.equal(report.currentAgentHostDeployment.releaseId, "release-3");
+    const tool = report.tools.find((item) => item.toolName === "mcp__math_anchor__math_run");
+    assert.equal(tool.currentAgentHostDeployment.componentVersion, "0.4.0");
+    assert.equal(tool.currentAgentHostDeployment.status, "fresh-session-observed");
+    assert.equal(tool.currentAgentHostDeployment.callsSinceActivation, 2);
+    assert.equal(tool.currentAgentHostDeployment.freshSessionCallsSinceActivation, 1);
+    assert.equal(tool.currentAgentHostDeployment.preActivationSessionCallsSinceActivation, 1);
+    assert.equal(tool.currentAgentHostDeployment.unknownSessionStartCallsSinceActivation, 0);
+    assert.equal(tool.currentAgentHostDeployment.ambiguousSessionCallsSinceActivation, 1);
+    const codexCoverage = report.freshSessionCorrelation.providers.find((item) => item.provider === "codex");
+    assert.equal(codexCoverage.coverageStatus, "complete-for-observed-calls");
+    assert.equal(codexCoverage.freshSessionCallsSinceActivation, 1);
+    assert.equal(report.freshSessionCorrelation.providers.find((item) => item.provider === "claude").coverageStatus, "no-current-release-tool-calls-observed");
+    assert.equal(report.routingObservations.length, 1);
+    assert.equal(report.freshSessionCorrelation.routing.observationRecordsReturned, 1);
+    assert.equal(report.freshSessionCorrelation.routing.observationRecordsTruncated, false);
+    assert.equal(report.routingObservations[0].currentReleaseToolFirst, false);
+    assert.equal(report.routingObservations[0].precedingShellOrOrchestrationCalls, 1);
+    assert.equal(report.tools.find((item) => item.toolName === "mcp__unrelated__not_math_run").currentAgentHostDeployment.status, "outside-current-agent-host-deployment");
+    const stored = JSON.stringify(database.prepare("SELECT * FROM agent_host_deployment_observation").get());
+    assert.equal(stored.includes(root), false);
+    database.close();
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("fresh-session routing reports bounded observation records instead of a false total", () => {
+  const root = temporaryRoot();
+  try {
+    const { config } = fixtureConfig(root);
+    const file = path.join(root, "deployment.json");
+    fs.writeFileSync(file, JSON.stringify({
+      schemaVersion: "openadam.agent-host-deployment-observation.v0.1",
+      observedAtMs: 2_000,
+      activatedAtMs: 1_000,
+      channel: "release",
+      releaseId: "release-routing-bound",
+      suiteVersion: "0.3.0",
+      profile: "local-dogfood",
+      components: [{
+        id: "math-anchor",
+        version: "0.4.0",
+        artifactSha256: "d".repeat(64),
+        toolNames: ["math.run"]
+      }],
+      context: null
+    }), { mode: 0o600 });
+    const database = openStateDatabase(config);
+    ingestAgentHostDeployment(database, file);
+    for (let index = 0; index < 101; index += 1) {
+      putToolEvent(database, {
+        eventId: `routing-bound-${index}`,
+        provider: "codex",
+        sessionHash: `session-${index}`,
+        turnHash: `turn-${index}`,
+        sessionStartedAtMs: 1_100,
+        occurredAtMs: 1_200 + index,
+        toolName: "mcp__math_anchor__math_run",
+        routeClass: "mcp",
+        isOpenAdam: true,
+        status: "completed",
+        sourceFormat: "test",
+        recordedAtMs: 1_200 + index
+      });
+    }
+    const report = buildReport(database, { days: 1 }, 3_000);
+    assert.equal(report.routingObservations.length, 100);
+    assert.deepEqual(report.freshSessionCorrelation.routing, {
+      observationRecordsReturned: 100,
+      observationRecordLimit: 100,
+      observationRecordsTruncated: true,
+      matchingTurnsInScannedEvents: 101,
+      sourceEventsScanned: 101,
+      sourceEventLimit: 50_000,
+      sourceEventsTruncated: false
+    });
+    database.close();
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("orchestration wrappers and derived nested calls cannot nominate a Procedure", () => {
   const root = temporaryRoot();
   try {
@@ -164,6 +379,37 @@ test("orchestration wrappers and derived nested calls cannot nominate a Procedur
     }
     const report = buildReport(database, { days: 1 }, now + 1000);
     assert.deepEqual(report.portfolio.procedureCandidates, []);
+    database.close();
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("maintenance previews and removes only observations older than the retained window", () => {
+  const root = temporaryRoot();
+  try {
+    const { config } = fixtureConfig(root, { ATO_RETENTION_DAYS: "45" });
+    const database = openStateDatabase(config);
+    const now = 100 * 24 * 60 * 60 * 1000;
+    for (const [eventId, occurredAtMs] of [["expired", 1], ["current", now - 1000]]) {
+      putToolEvent(database, {
+        eventId,
+        provider: "codex",
+        occurredAtMs,
+        toolName: "mcp__math_anchor__math_run",
+        routeClass: "mcp",
+        isOpenAdam: true,
+        status: "completed",
+        sourceFormat: "test",
+        recordedAtMs: occurredAtMs
+      });
+    }
+    const preview = maintainDatabase(database, config, { dryRun: true }, now);
+    assert.equal(preview.eligible.toolEvents, 1);
+    assert.equal(database.prepare("SELECT count(*) AS n FROM tool_event").get().n, 2);
+    const completed = maintainDatabase(database, config, {}, now);
+    assert.equal(completed.removed.toolEvents, 1);
+    assert.deepEqual(database.prepare("SELECT event_id FROM tool_event").all().map((row) => row.event_id), ["current"]);
     database.close();
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

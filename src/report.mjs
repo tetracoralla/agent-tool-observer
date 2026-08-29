@@ -1,6 +1,9 @@
 import {
   capabilityReportRows,
+  deploymentRoutingEvents,
+  deploymentToolRows,
   directRuntimeHealth,
+  latestAgentHostDeployment,
   latestContextSurfaceRows,
   procedureReportRows,
   providerHealth,
@@ -12,11 +15,19 @@ import {
   usageReportRows
 } from "./db-read.mjs";
 
-export const REPORT_SCHEMA_VERSION = "openadam.agent-tool-observer.report.v0.3";
+export const REPORT_SCHEMA_VERSION = "openadam.agent-tool-observer.report.v0.4";
+const ROUTING_EVENT_LIMIT = 50_000;
+const ROUTING_OBSERVATION_LIMIT = 100;
+const SESSION_START_BASIS = Object.freeze({
+  codex: "codex-session-meta-timestamp",
+  claude: "earliest-observed-claude-session-record-timestamp",
+  zcode: "zcode-session-time-created-when-source-schema-exposes-it"
+});
 
 export function isCurrentReport(value) {
   return value?.schemaVersion === REPORT_SCHEMA_VERSION
     && Array.isArray(value.tools)
+    && value.freshSessionCorrelation?.adoptionStatus === "not-assessed"
     && value.cost?.monetary?.status === "unavailable"
     && value.tools.every((tool) => tool?.correctnessStatus === "unknown"
       && tool?.opportunityStatus === "unknown"
@@ -41,12 +52,50 @@ function semanticKey(value) {
   return String(value).toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
+function operationKey(value) {
+  const text = String(value);
+  if (text.startsWith("mcp__")) return semanticKey(text.split("__").at(-1));
+  return semanticKey(text);
+}
+
 function toolMatchesBinding(toolName, target) {
-  return semanticKey(toolName).endsWith(semanticKey(target));
+  return semanticKey(toolName) === semanticKey(target)
+    || operationKey(toolName) === operationKey(target);
 }
 
 function hasSemanticTarget(toolName, targets) {
   return targets.some((target) => toolMatchesBinding(toolName, target));
+}
+
+function deploymentFromRow(row) {
+  if (!row) return null;
+  return {
+    deploymentId: row.deployment_id,
+    observedAtMs: Number(row.observed_at_ms),
+    activatedAtMs: Number(row.activated_at_ms),
+    channel: row.channel,
+    releaseId: row.release_id,
+    suiteVersion: row.suite_version,
+    profile: row.profile,
+    components: JSON.parse(row.components_json),
+    context: row.context_source_id === null ? null : {
+      sourceId: row.context_source_id,
+      sourceRevision: row.context_source_revision,
+      catalogSha256: row.context_catalog_sha256,
+      catalogBytes: numeric(row.context_catalog_bytes),
+      toolCount: numeric(row.context_tool_count)
+    },
+    observationBasis: "agent-host-deployment-observation"
+  };
+}
+
+function deploymentBinding(toolName, deployment) {
+  if (!deployment) return null;
+  for (const component of deployment.components) {
+    const matchedToolName = component.toolNames.find((candidate) => toolMatchesBinding(toolName, candidate));
+    if (matchedToolName) return { component, matchedToolName };
+  }
+  return null;
 }
 
 function sequenceCandidates(rows) {
@@ -85,9 +134,134 @@ function sequenceCandidates(rows) {
     .slice(0, 25);
 }
 
+function deploymentRoutingAnalysis(rows, deployment) {
+  if (!deployment) {
+    return {
+      observations: [],
+      summary: {
+        observationRecordsReturned: 0,
+        observationRecordLimit: ROUTING_OBSERVATION_LIMIT,
+        observationRecordsTruncated: false,
+        matchingTurnsInScannedEvents: 0,
+        sourceEventsScanned: 0,
+        sourceEventLimit: ROUTING_EVENT_LIMIT,
+        sourceEventsTruncated: false
+      }
+    };
+  }
+  const sourceEventsTruncated = rows.length > ROUTING_EVENT_LIMIT;
+  const boundedRows = rows.slice(0, ROUTING_EVENT_LIMIT);
+  const turns = new Map();
+  for (const row of boundedRows) {
+    const key = `${row.provider}\0${row.session_hash}\0${row.turn_hash}`;
+    if (!turns.has(key)) {
+      turns.set(key, {
+        provider: row.provider,
+        sessionHash: row.session_hash,
+        turnHash: row.turn_hash,
+        events: []
+      });
+    }
+    turns.get(key).events.push(row);
+  }
+  const matchingTurns = [...turns.values()].flatMap((turn) => {
+    const firstReleaseIndex = turn.events.findIndex((event) => deploymentBinding(event.tool_name, deployment));
+    if (firstReleaseIndex < 0) return [];
+    const preceding = turn.events.slice(0, firstReleaseIndex);
+    const releaseEvents = turn.events.filter((event) => deploymentBinding(event.tool_name, deployment));
+    const recoveryObserved = releaseEvents.some((event, index) => event.status === "error"
+      && releaseEvents.slice(index + 1).some((later) => later.tool_name === event.tool_name && later.status === "completed"));
+    const counts = new Map();
+    for (const event of releaseEvents) counts.set(event.tool_name, (counts.get(event.tool_name) ?? 0) + 1);
+    return [{
+      provider: turn.provider,
+      sessionHash: turn.sessionHash,
+      turnHash: turn.turnHash,
+      firstObservedTool: turn.events[0].tool_name,
+      firstCurrentReleaseTool: turn.events[firstReleaseIndex].tool_name,
+      currentReleaseToolFirst: firstReleaseIndex === 0,
+      precedingToolCalls: preceding.length,
+      precedingShellOrOrchestrationCalls: preceding.filter((event) => ["native-shell", "orchestration"].includes(event.route_class)).length,
+      currentReleaseCalls: releaseEvents.length,
+      currentReleaseErrors: releaseEvents.filter((event) => event.status === "error").length,
+      runtimeRetries: releaseEvents.reduce((sum, event) => sum + Number(event.retry_count ?? 0), 0),
+      repeatedCurrentReleaseCalls: [...counts.values()].reduce((sum, count) => sum + Math.max(0, count - 1), 0),
+      recoveryObserved,
+      taskQualityStatus: "unknown",
+      opportunityStatus: "unknown",
+      observationBasis: "fresh-session-tool-order-metadata"
+    }];
+  });
+  return {
+    observations: matchingTurns.slice(0, ROUTING_OBSERVATION_LIMIT),
+    summary: {
+      observationRecordsReturned: Math.min(matchingTurns.length, ROUTING_OBSERVATION_LIMIT),
+      observationRecordLimit: ROUTING_OBSERVATION_LIMIT,
+      observationRecordsTruncated: sourceEventsTruncated || matchingTurns.length > ROUTING_OBSERVATION_LIMIT,
+      matchingTurnsInScannedEvents: matchingTurns.length,
+      sourceEventsScanned: boundedRows.length,
+      sourceEventLimit: ROUTING_EVENT_LIMIT,
+      sourceEventsTruncated
+    }
+  };
+}
+
+function sessionCoverageStatus(calls, unknownSessionStartCalls) {
+  if (calls === 0) return "no-current-release-tool-calls-observed";
+  if (unknownSessionStartCalls === 0) return "complete-for-observed-calls";
+  if (unknownSessionStartCalls === calls) return "unavailable-for-observed-calls";
+  return "partial-for-observed-calls";
+}
+
+function freshSessionCorrelation(deploymentRows, deployment, routingSummary) {
+  const providers = new Map(Object.entries(SESSION_START_BASIS).map(([provider, sessionStartBasis]) => [provider, {
+    provider,
+    sessionStartBasis,
+    currentReleaseToolCallsSinceActivation: 0,
+    callsWithKnownSessionStart: 0,
+    callsWithUnknownSessionStart: 0,
+    freshSessionCallsSinceActivation: 0,
+    preActivationSessionCallsSinceActivation: 0
+  }]));
+  if (deployment) {
+    for (const row of deploymentRows) {
+      if (!deploymentBinding(row.tool_name, deployment)) continue;
+      const provider = providers.get(row.provider);
+      if (!provider) continue;
+      const calls = Number(row.calls ?? 0);
+      const fresh = Number(row.fresh_session_calls ?? 0);
+      const preActivation = Number(row.pre_activation_session_calls ?? 0);
+      const unknown = Number(row.unknown_session_start_calls ?? 0);
+      provider.currentReleaseToolCallsSinceActivation += calls;
+      provider.callsWithKnownSessionStart += fresh + preActivation;
+      provider.callsWithUnknownSessionStart += unknown;
+      provider.freshSessionCallsSinceActivation += fresh;
+      provider.preActivationSessionCallsSinceActivation += preActivation;
+    }
+  }
+  return {
+    scope: deployment ? "declared-current-agent-host-tool-bindings-since-release-activation" : "no-current-agent-host-deployment",
+    providers: [...providers.values()].map((provider) => ({
+      ...provider,
+      coverageStatus: sessionCoverageStatus(provider.currentReleaseToolCallsSinceActivation, provider.callsWithUnknownSessionStart)
+    })),
+    routing: routingSummary,
+    adoptionStatus: "not-assessed",
+    taskQualityStatus: "unknown",
+    opportunityStatus: "unknown",
+    observationBasis: "provider-native-or-provider-record-session-start-metadata"
+  };
+}
+
 export function buildReport(database, options = {}, nowMs = Date.now()) {
   const days = options.days ?? 30;
   const cutoffMs = nowMs - days * 24 * 60 * 60 * 1000;
+  const currentDeployment = deploymentFromRow(latestAgentHostDeployment(database));
+  const deploymentRows = currentDeployment ? deploymentToolRows(database, currentDeployment.activatedAtMs) : [];
+  const deploymentCalls = new Map(
+    deploymentRows
+      .map((row) => [`${row.provider}\0${row.tool_name}`, row])
+  );
   const usageAssociations = new Map(
     toolUsageAssociationRows(database, cutoffMs, options.openAdamOnly === true)
       .map((row) => [`${row.provider}\0${row.tool_name}`, row])
@@ -96,6 +270,12 @@ export function buildReport(database, options = {}, nowMs = Date.now()) {
     const measured = Number(row.measured);
     const errors = Number(row.errors);
     const associated = usageAssociations.get(`${row.provider}\0${row.tool_name}`);
+    const binding = deploymentBinding(row.tool_name, currentDeployment);
+    const deploymentCall = deploymentCalls.get(`${row.provider}\0${row.tool_name}`);
+    const freshSessionCalls = Number(deploymentCall?.fresh_session_calls ?? 0);
+    const preActivationSessionCalls = Number(deploymentCall?.pre_activation_session_calls ?? 0);
+    const unknownSessionStartCalls = Number(deploymentCall?.unknown_session_start_calls ?? 0);
+    const callsSinceActivation = Number(deploymentCall?.calls ?? 0);
     return {
       provider: row.provider,
       toolName: row.tool_name,
@@ -146,7 +326,32 @@ export function buildReport(database, options = {}, nowMs = Date.now()) {
       signal: signalFor(row),
       correctnessStatus: "unknown",
       opportunityStatus: "unknown",
-      routingMode: "unknown"
+      routingMode: "unknown",
+      currentAgentHostDeployment: binding ? {
+        status: freshSessionCalls > 0
+          ? "fresh-session-observed"
+          : callsSinceActivation === 0
+            ? "declared-binding-only"
+            : unknownSessionStartCalls === callsSinceActivation
+              ? "session-start-unavailable"
+              : "no-fresh-session-correlation",
+        releaseId: currentDeployment.releaseId,
+        suiteVersion: currentDeployment.suiteVersion,
+        profile: currentDeployment.profile,
+        componentId: binding.component.id,
+        componentVersion: binding.component.version,
+        declaredToolName: binding.matchedToolName,
+        callsSinceActivation,
+        freshSessionCallsSinceActivation: freshSessionCalls,
+        preActivationSessionCallsSinceActivation: preActivationSessionCalls,
+        unknownSessionStartCallsSinceActivation: unknownSessionStartCalls,
+        ambiguousSessionCallsSinceActivation: preActivationSessionCalls + unknownSessionStartCalls,
+        sessionStartBasis: SESSION_START_BASIS[row.provider] ?? "unavailable",
+        sessionStartCoverageStatus: sessionCoverageStatus(callsSinceActivation, unknownSessionStartCalls),
+        mappingBasis: "declared-agent-host-tool-binding-and-provider-session-start-metadata"
+      } : {
+        status: row.is_openadam === 1 ? "outside-current-agent-host-deployment" : "not-applicable"
+      }
     };
   });
   const usage = usageReportRows(database, cutoffMs).map((row) => ({
@@ -235,6 +440,10 @@ export function buildReport(database, options = {}, nowMs = Date.now()) {
       kind: "procedure",
       procedureId: row.semantic_id,
       procedureVersion: row.semantic_version
+    } : row.target_kind === "mcp-operation" ? {
+      kind: "mcp-operation",
+      toolName: row.tool_name,
+      operationId: row.operation_id
     } : {
       kind: "mcp-tool",
       toolName: row.tool_name
@@ -286,8 +495,19 @@ export function buildReport(database, options = {}, nowMs = Date.now()) {
     },
     tokenMeasurements: JSON.parse(row.token_measurements_json),
     measurementBasis: "explicit-context-surface-analysis-import",
-    currentInstalledBindingStatus: "not_assessed"
+    currentInstalledBindingStatus: !currentDeployment?.context
+      ? "not_assessed"
+      : currentDeployment.context.sourceId === row.source_id
+        && currentDeployment.context.sourceRevision === row.source_revision
+        && currentDeployment.context.catalogSha256 === row.catalog_sha256
+        ? "matched-current-agent-host-deployment"
+        : "not-current-agent-host-deployment"
   }));
+  const routingAnalysis = currentDeployment
+    ? deploymentRoutingAnalysis(deploymentRoutingEvents(database, currentDeployment.activatedAtMs), currentDeployment)
+    : deploymentRoutingAnalysis([], null);
+  const routingObservations = routingAnalysis.observations;
+  const deploymentFreshSessionCorrelation = freshSessionCorrelation(deploymentRows, currentDeployment, routingAnalysis.summary);
   return {
     schemaVersion: REPORT_SCHEMA_VERSION,
     generatedAtMs: nowMs,
@@ -299,6 +519,9 @@ export function buildReport(database, options = {}, nowMs = Date.now()) {
       errorCode: row.error_code,
       scannedAtMs: Number(row.scanned_at_ms)
     })),
+    currentAgentHostDeployment: currentDeployment,
+    freshSessionCorrelation: deploymentFreshSessionCorrelation,
+    routingObservations,
     tools,
     usage,
     cost: {
@@ -313,7 +536,9 @@ export function buildReport(database, options = {}, nowMs = Date.now()) {
       },
       staticContext: {
         status: contextSurfaces.length > 0 ? "explicit-snapshots-imported" : "unavailable",
-        installedCatalogAcquisition: "outside-observer"
+        installedCatalogAcquisition: currentDeployment?.context
+          ? "agent-host-deployment-observation"
+          : "outside-observer"
       },
       monetary: {
         status: "unavailable",
@@ -347,7 +572,7 @@ export function buildReport(database, options = {}, nowMs = Date.now()) {
       procedureCandidates,
       weakenRoutingCandidates: [],
       retireCandidates: [],
-      claimBoundary: "Legacy receipts record declared execution and binding identity; Direct Runtime events record metadata about actual direct execution; imported Context Surface analyses measure explicit snapshots; passive repetition only nominates evaluations. None establishes correctness, opportunity, natural routing, redundancy, retirement, current installed binding, cost attribution, or authorization."
+      claimBoundary: "Legacy receipts record declared execution and binding identity; Direct Runtime events record metadata about actual direct execution; imported Context Surface analyses measure explicit snapshots. Agent Host deployment observations declare one active immutable release. A matching tool name from a provider record whose observed session start is at or after activation is only a current-release correlation candidate, not causal attribution or proof of the catalog loaded by that host; pre-activation and unknown-start sessions remain separate. Fresh-session routing records are bounded metadata records, and their returned count is not a total when either bound is reached. None establishes correctness, adoption opportunity, natural routing, redundancy, retirement, exclusive call attribution, task quality, or authorization."
     },
     privacy: {
       rawContentStored: false,
@@ -383,6 +608,7 @@ export function renderReport(report) {
     `Legacy semantic receipts: ${(report.procedures ?? []).length} Procedure implementations, ${(report.capabilities ?? []).length} Capability bindings (human-checkpoint fields discarded on read)`,
     `Direct semantic execution groups: ${(report.semanticExecutions ?? []).length}; source=${report.directRuntime?.status ?? "not-collected"}`,
     `Static context snapshots: ${(report.contextSurfaces ?? []).length}; monetary cost=${report.cost?.monetary?.status ?? "unavailable"}`,
+    `Current Agent Host deployment: ${report.currentAgentHostDeployment?.releaseId ?? "not observed"}`,
     `Discovery candidates: ${(report.portfolio.capabilityCandidates ?? []).length} Capability contracts, ${(report.portfolio.procedureCandidates ?? []).length} Procedure evaluations`,
     "Routing/retirement: insufficient data until opportunity and comparable-route observations exist.",
     "Privacy: metadata only, no source paths or raw content, no network, no model calls."

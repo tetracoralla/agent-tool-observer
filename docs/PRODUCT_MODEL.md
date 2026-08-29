@@ -120,12 +120,45 @@ versioned semantic target and provider identity, binding/contract digests,
 terminal status and stable error code, timing, cold/warm session state, and
 numeric serialized payload sizes. The Runtime event declares zero model calls
 and leaves token and monetary cost null; the observer preserves that boundary.
+Provider-native MCP observations keep `mcp-tool` distinct from
+`mcp-operation`; the latter retains both carrier tool name and selected
+operation id. Schema v11 migrates existing semantic rows without changing
+their identities.
 
 Imported Context Surface analyses retain source ID/revision, snapshot and
 catalog digests, catalog/tool/schema byte counts, duplicate/collision counts,
 and explicitly reported token measurements. Tool descriptions and schemas are
-not copied into the observer. An import does not establish that the snapshot is
-the currently installed catalog; that binding status remains `not_assessed`.
+not copied into the observer. An import alone does not establish that the
+snapshot is the currently installed catalog; that binding status remains
+`not_assessed`. A matching explicit Agent Host deployment observation changes
+it to `matched-current-agent-host-deployment` for that exact source, revision,
+and catalog digest.
+
+Agent Host deployment observations retain only release/channel/profile
+identity, immutable component versions and artifact digests, declared tool
+names, activation/observation timestamps, and the matching catalog identity and
+sizes. Refreshing one unchanged activated deployment advances its observation
+timestamp in one semantic row instead of creating a row per refresh. No
+component path, command, task content, tool arguments, or result is stored. The
+latest observation is the current correlation basis; it does not prove host
+health or task quality.
+
+Tool events retain provider-scoped session-start observations when the provider
+record exposes them: the Codex session metadata timestamp, the earliest
+timestamp observed in one Claude session log, or ZCode `session.time_created`
+when that table and field exist. A tool call becomes a current-release
+correlation candidate only when that observed start is at or after release
+activation and its tool name maps to a declared binding. This is not causal
+attribution and does not prove which catalog the host actually loaded. Calls
+from pre-activation sessions and calls with an unknown start remain separate.
+
+Fresh-session routing observations retain only hashed session/turn identifiers,
+tool names, order/counts, route classes, terminal status, and numeric retry
+signals. The report discloses the 50,000 source-event scan bound, the 100
+returned-record bound, and whether either bound truncated the projection; the
+returned record count is not labeled as total turns. These records do not
+retain prompts, commands, arguments, results, or a judgment of whether the task
+should have used the tool.
 
 Legacy v0.2 receipts may still contain human-checkpoint stages. The portable
 approval semantics behind them were removed from the Procedure standard on
@@ -143,8 +176,8 @@ correctness.
 ## Report semantics
 
 The current JSON report is
-`openadam.agent-tool-observer.report.v0.3`. A snapshot without that exact
-version is stale input and is rebuilt from the current database. v0.3 uses
+`openadam.agent-tool-observer.report.v0.4`. A snapshot without that exact
+version is stale input and is rebuilt from the current database. v0.4 uses
 `correctnessStatus` and `opportunityStatus`; both remain `unknown` unless a
 separate current assessment owns the judgment.
 
@@ -196,6 +229,11 @@ to a provider source.
 `ATO_DIRECT_RUNTIME_LOGS` accepts an explicit platform-delimited list of exact
 metadata-log paths. It does not accept a discovery root. The Direct Runtime
 must separately be launched with `--observation-log` for events to exist.
+
+`ATO_RETENTION_DAYS` defaults to 45 and must be at least the configured report
+lookback. Explicit maintenance deletes expired event rows, preserves the latest
+Context Surface measurement per source and the current Agent Host deployment,
+then checkpoints and compacts SQLite. Provider cursors and health state remain.
 
 ## Non-goals for v0.1
 

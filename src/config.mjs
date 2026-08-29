@@ -11,6 +11,7 @@ const DEFAULT_STATE_DIR_PARTS = [
 
 export const DEFAULT_LIMITS = Object.freeze({
   lookbackDays: 30,
+  retentionDays: 45,
   maxFilesPerProvider: 2_000,
   maxBytesPerSource: 8 * 1024 * 1024,
   maxBytesPerRun: 128 * 1024 * 1024,
@@ -39,8 +40,14 @@ export function resolveConfig(environment = process.env, homeDirectory = os.home
   const stateDir = path.resolve(
     environment.ATO_STATE_DIR || path.join(homeDirectory, ...DEFAULT_STATE_DIR_PARTS)
   );
+  const lookbackDays = integerSetting(environment.ATO_LOOKBACK_DAYS, DEFAULT_LIMITS.lookbackDays, 1, 3650, "ATO_LOOKBACK_DAYS");
+  const retentionDays = integerSetting(environment.ATO_RETENTION_DAYS, DEFAULT_LIMITS.retentionDays, 1, 3650, "ATO_RETENTION_DAYS");
+  if (retentionDays < lookbackDays) {
+    throw new ObserverError("CONFIG_INVALID", "ATO_RETENTION_DAYS must be greater than or equal to ATO_LOOKBACK_DAYS");
+  }
   const limits = {
-    lookbackDays: integerSetting(environment.ATO_LOOKBACK_DAYS, DEFAULT_LIMITS.lookbackDays, 1, 3650, "ATO_LOOKBACK_DAYS"),
+    lookbackDays,
+    retentionDays,
     maxFilesPerProvider: integerSetting(environment.ATO_MAX_FILES, DEFAULT_LIMITS.maxFilesPerProvider, 1, 100_000, "ATO_MAX_FILES"),
     maxBytesPerSource: integerSetting(environment.ATO_MAX_SOURCE_BYTES, DEFAULT_LIMITS.maxBytesPerSource, 4096, 128 * 1024 * 1024, "ATO_MAX_SOURCE_BYTES"),
     maxBytesPerRun: integerSetting(environment.ATO_MAX_RUN_BYTES, DEFAULT_LIMITS.maxBytesPerRun, 4096, 2 * 1024 * 1024 * 1024, "ATO_MAX_RUN_BYTES"),

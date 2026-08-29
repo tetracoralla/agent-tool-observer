@@ -21,6 +21,13 @@ imported into the observer; the observer stores only source revision, digests,
 counts, byte measurements, and explicitly reported token measurements. It does
 not discover or crawl installed catalogs.
 
+Agent Host may also hand the observer one bounded
+`openadam.agent-host-deployment-observation.v0.1` file. It contains the active
+compatibility-release identity, immutable component versions and digests,
+declared Agent-visible tool bindings, and the exact imported catalog digest.
+That lets reports correlate passive calls with the release that declared the
+binding without storing task content, commands, or filesystem paths.
+
 Procedure implementations may also hand an explicit metadata-only
 `openadam.procedure-receipt.v0.1` or `v0.2` JSON, JSONL, or array file to the
 observer. These receipt formats are **legacy**: the portable receipt and
@@ -41,6 +48,9 @@ node --no-warnings src/cli.mjs report --days 30
 node --no-warnings src/cli.mjs report --days 30 --openadam --json
 node --no-warnings src/cli.mjs ingest-receipts --file /path/to/receipts.json --json
 node --no-warnings src/cli.mjs ingest-context-surface --file /path/to/analysis.json --json
+node --no-warnings src/cli.mjs ingest-agent-host-deployment --file /path/to/deployment.json --json
+node --no-warnings src/cli.mjs maintain --dry-run --json
+node --no-warnings src/cli.mjs maintain --json
 node --no-warnings src/cli.mjs install --dry-run
 node --no-warnings src/cli.mjs install
 ```
@@ -73,9 +83,20 @@ that fixed copy, so later edits to a development checkout cannot silently
 change scheduled collection. Reinstalling selects a new digest while retaining
 older copies for inspection or rollback.
 
+An embedding release may set `ATO_NODE_EXECUTABLE` to its own verified Node
+binary. The installer then binds the LaunchAgent to that exact executable and
+fails closed instead of falling back to another machine installation.
+
 The current report schema is
-`openadam.agent-tool-observer.report.v0.3`. Older report snapshots are rebuilt
+`openadam.agent-tool-observer.report.v0.4`. Older report snapshots are rebuilt
 from the current database before they are returned.
+
+The default reporting window is 30 days and the default retained event window
+is 45 days. `maintain` removes only rows older than that bound, preserves the
+latest Context Surface measurement per source and the current Agent Host
+deployment observation, checkpoints the write-ahead log, and compacts SQLite.
+`ATO_RETENTION_DAYS` may raise the bound but cannot be lower than
+`ATO_LOOKBACK_DAYS`.
 
 ## Supported sources
 
@@ -89,6 +110,12 @@ from the current database before they are returned.
 - explicit Procedure Receipt files supplied to `ingest-receipts`.
 - explicit Context Surface analysis files supplied to
   `ingest-context-surface`.
+- explicit Agent Host deployment observations supplied to
+  `ingest-agent-host-deployment`.
+
+Direct Runtime targets retain the distinction between a whole MCP tool and one
+explicitly projected MCP operation, so reports do not erase the selected
+operation identity.
 
 Missing or changed providers are reported independently; one provider cannot
 silently make the others look healthy.
@@ -117,6 +144,19 @@ the Agent selected a tool naturally, that a nominated sequence is
 professionally correct, or that a tool should be retired. Those
 remain `insufficient-data` until a targeted controlled evaluation supplies the
 missing observations and comparison assessment.
+
+An Agent Host deployment observation can establish that a passive tool name
+matches one declared binding in one named compatibility release. Codex, Claude,
+and ZCode session-start coverage and its provider-specific basis are reported
+separately. Calls from a hashed session whose recorded start is at or after
+release activation are counted separately from calls made by pre-activation or
+unknown-start sessions. For fresh sessions the report also preserves bounded
+tool-order metadata: whether the release tool was first, preceding
+shell/orchestration call counts, retries, errors, and observed same-tool
+recovery. Both scan and returned-record truncation are explicit, so the number
+of returned routing records is never presented as total turns. It does not
+store commands or task content and does not establish that the Agent had an
+opportunity, selected the best tool, or produced a good result.
 
 ## Development
 

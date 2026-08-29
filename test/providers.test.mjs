@@ -15,7 +15,7 @@ test("Codex parser projects wrapper and nested MCP names without raw source", ()
     const { config } = fixtureConfig(root);
     const database = openStateDatabase(config);
     const parser = createCodexParser({ database, sourceId: "source-hash", recordedAtMs: 1000 });
-    parser.onRecord({ type: "session_meta", payload: { id: "session-secret" } });
+    parser.onRecord({ timestamp: "2026-08-20T23:59:00.000Z", type: "session_meta", payload: { id: "session-secret" } });
     parser.onRecord({ type: "turn_context", payload: { turn_id: "turn-secret" } });
     parser.onRecord({
       timestamp: "2026-08-21T00:00:00.000Z",
@@ -33,6 +33,7 @@ test("Codex parser projects wrapper and nested MCP names without raw source", ()
     assert.equal(rows[1].derived, 1);
     assert.equal(rows[1].route_class, "mcp");
     assert.equal(rows[0].request_bytes, Buffer.byteLength('await tools.mcp__math_anchor__math_run({expression:"secret-expression"}); tools.map(Boolean);'));
+    assert.equal(database.prepare("SELECT session_started_at_ms FROM tool_event WHERE derived = 0").get().session_started_at_ms, Date.parse("2026-08-20T23:59:00.000Z"));
     assert.equal(rows[1].request_bytes, null);
     const stored = JSON.stringify(database.prepare("SELECT * FROM tool_event").all());
     assert.equal(stored.includes("session-secret"), false);
@@ -98,8 +99,15 @@ test("Claude parser correlates tool result and stores usage counts only", () => 
       timestamp: "2026-08-21T00:00:00.250Z",
       message: { content: [{ type: "tool_result", tool_use_id: "tool-secret", is_error: true, content: "private result" }] }
     });
+    parser.onRecord({
+      type: "system",
+      sessionId: "claude-session-secret",
+      timestamp: "2026-08-20T23:59:59.000Z",
+      message: { content: [] }
+    });
     const tool = database.prepare("SELECT * FROM tool_event").get();
     assert.equal(tool.status, "error");
+    assert.equal(tool.session_started_at_ms, Date.parse("2026-08-20T23:59:59.000Z"));
     assert.equal(tool.duration_ms, 250);
     assert.equal(tool.request_bytes, Buffer.byteLength(JSON.stringify({ private: "value" })));
     assert.equal(tool.response_bytes, Buffer.byteLength("private result"));
@@ -132,6 +140,10 @@ test("ZCode adapter reads only normalized usage columns", () => {
         cache_read_input_tokens INTEGER, computed_total_tokens INTEGER,
         raw_usage_json TEXT
       );
+      CREATE TABLE session (
+        id TEXT PRIMARY KEY, time_created INTEGER
+      );
+      INSERT INTO session VALUES ('session-secret', 1787298000000);
       INSERT INTO tool_usage VALUES (
         'row-secret', 'session-secret', 'turn-secret', 'call-secret', 'Bash',
         'running', 1787298054486, NULL, NULL, 0, 'must-not-copy'
@@ -147,6 +159,7 @@ test("ZCode adapter reads only normalized usage columns", () => {
     assert.equal(health.status, "ok");
     assert.equal(health.eventsWritten, 2);
     assert.equal(database.prepare("SELECT count(*) AS n FROM tool_event").get().n, 1);
+    assert.equal(database.prepare("SELECT session_started_at_ms FROM tool_event").get().session_started_at_ms, 1787298000000);
     assert.equal(database.prepare("SELECT count(*) AS n FROM usage_event").get().n, 1);
     const repeat = scanZcode({ database, config, minimumMtimeMs: 0, scannedAtMs: 1787299001000 });
     assert.equal(repeat.eventsWritten, 0);

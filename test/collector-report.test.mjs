@@ -3,7 +3,12 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { collect } from "../src/collector.mjs";
-import { acquireLease, openStateDatabase, releaseLease } from "../src/db.mjs";
+import {
+  acquireLease,
+  openStateDatabase,
+  putSemanticExecutionEvent,
+  releaseLease
+} from "../src/db.mjs";
 import { buildReport, isCurrentReport, REPORT_SCHEMA_VERSION } from "../src/report.mjs";
 import { fixtureConfig, temporaryRoot, writeJsonl } from "./helpers.mjs";
 
@@ -133,7 +138,7 @@ test("schema migration discards stale derived Codex projections and reopens thei
     database.close();
 
     database = openStateDatabase(config);
-    assert.equal(database.prepare("SELECT value FROM metadata WHERE key = 'schema_version'").get().value, "10");
+    assert.equal(database.prepare("SELECT value FROM metadata WHERE key = 'schema_version'").get().value, "11");
     assert.equal(database.prepare("SELECT count(*) AS n FROM tool_event WHERE event_id = 'derived'").get().n, 0);
     assert.equal(database.prepare("SELECT count(*) AS n FROM source_cursor WHERE source_id = 'source'").get().n, 0);
     database.close();
@@ -172,7 +177,7 @@ test("schema v3 migration purges corrupted Codex rollups for clean re-ingestion"
     database.close();
 
     database = openStateDatabase(config);
-    assert.equal(database.prepare("SELECT value FROM metadata WHERE key = 'schema_version'").get().value, "10");
+    assert.equal(database.prepare("SELECT value FROM metadata WHERE key = 'schema_version'").get().value, "11");
     assert.equal(database.prepare("SELECT count(*) AS n FROM tool_event WHERE provider = 'codex'").get().n, 0);
     assert.equal(database.prepare("SELECT count(*) AS n FROM usage_event WHERE provider = 'codex'").get().n, 0);
     assert.equal(database.prepare("SELECT count(*) AS n FROM source_cursor WHERE provider = 'codex'").get().n, 0);
@@ -204,7 +209,7 @@ test("schema v4 migration repairs stored tool taxonomy without deleting observat
       SELECT tool_namespace, route_class, is_openadam
       FROM tool_event WHERE event_id = 'reclassify'
     `).get() };
-    assert.equal(database.prepare("SELECT value FROM metadata WHERE key = 'schema_version'").get().value, "10");
+    assert.equal(database.prepare("SELECT value FROM metadata WHERE key = 'schema_version'").get().value, "11");
     assert.deepEqual(row, {
       tool_namespace: "data_transformer",
       route_class: "mcp",
@@ -227,7 +232,7 @@ test("schema v5 migration adds the bounded ZCode tie cursor", () => {
 
     database = openStateDatabase(config);
     const columns = database.prepare("PRAGMA table_info(provider_checkpoint)").all().map((row) => row.name);
-    assert.equal(database.prepare("SELECT value FROM metadata WHERE key = 'schema_version'").get().value, "10");
+    assert.equal(database.prepare("SELECT value FROM metadata WHERE key = 'schema_version'").get().value, "11");
     assert.equal(columns.includes("last_started_count"), true);
     database.close();
   } finally {
@@ -259,7 +264,7 @@ test("schema v7 migration adds exact receipt outcomes without losing prior rows"
     const row = database.prepare(
       "SELECT outcome, receipt_outcome FROM procedure_event WHERE event_id = ?"
     ).get("a".repeat(64));
-    assert.equal(database.prepare("SELECT value FROM metadata WHERE key = 'schema_version'").get().value, "10");
+    assert.equal(database.prepare("SELECT value FROM metadata WHERE key = 'schema_version'").get().value, "11");
     assert.deepEqual({ ...row }, { outcome: "success", receipt_outcome: "success" });
     database.close();
   } finally {
@@ -290,7 +295,7 @@ test("schema v8 migration drops the retired human-checkpoint table", () => {
     database.close();
 
     database = openStateDatabase(config);
-    assert.equal(database.prepare("SELECT value FROM metadata WHERE key = 'schema_version'").get().value, "10");
+    assert.equal(database.prepare("SELECT value FROM metadata WHERE key = 'schema_version'").get().value, "11");
     assert.equal(
       database.prepare("SELECT count(*) AS n FROM sqlite_master WHERE name = 'human_checkpoint_event'").get().n,
       0
@@ -321,11 +326,97 @@ test("schema v9 migration adds payload measurements and semantic observation tab
 
     database = openStateDatabase(config);
     const columns = new Set(database.prepare("PRAGMA table_info(tool_event)").all().map((row) => row.name));
-    assert.equal(database.prepare("SELECT value FROM metadata WHERE key = 'schema_version'").get().value, "10");
+    assert.equal(database.prepare("SELECT value FROM metadata WHERE key = 'schema_version'").get().value, "11");
     assert.equal(columns.has("request_bytes"), true);
     assert.equal(columns.has("response_bytes"), true);
     assert.equal(database.prepare("SELECT count(*) AS n FROM tool_event WHERE event_id = 'v9-tool'").get().n, 1);
     assert.equal(database.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'semantic_execution_event'").get().n, 1);
+    database.close();
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("schema v10 migration preserves semantic observations and admits projected MCP operations", () => {
+  const root = temporaryRoot();
+  try {
+    const { config } = fixtureConfig(root);
+    let database = openStateDatabase(config);
+    const base = {
+      sourceId: "a".repeat(64),
+      workOrderHash: `sha256:${"b".repeat(64)}`,
+      callHash: `sha256:${"c".repeat(64)}`,
+      occurredAtMs: 1000,
+      completedAtMs: 1010,
+      semanticId: null,
+      semanticVersion: null,
+      providerId: "io.github.tetracoralla.math-anchor",
+      providerVersion: "0.3.0",
+      transport: "mcp-stdio",
+      lifecycle: "persistent",
+      status: "ok",
+      errorCode: null,
+      durationMs: 10,
+      queueMs: 1,
+      providerRoundTripMs: 8,
+      requestBytes: 100,
+      responseBytes: 200,
+      sessionState: "warm",
+      bindingDigest: `sha256:${"d".repeat(64)}`,
+      contractDigest: `sha256:${"e".repeat(64)}`,
+      sourceFormat: "openadam.direct-execution-observation.v0.1",
+      recordedAtMs: 1020
+    };
+    putSemanticExecutionEvent(database, {
+      ...base,
+      eventId: "f".repeat(64),
+      targetKind: "mcp-tool",
+      operationId: null,
+      toolName: "math.batch"
+    });
+    database.exec(`
+      DROP INDEX IF EXISTS semantic_execution_time_idx;
+      DROP INDEX IF EXISTS semantic_execution_target_idx;
+      DROP INDEX IF EXISTS semantic_execution_provider_idx;
+      CREATE TABLE semantic_execution_event_v10 AS
+        SELECT * FROM semantic_execution_event;
+      DROP TABLE semantic_execution_event;
+      ALTER TABLE semantic_execution_event_v10 RENAME TO semantic_execution_event;
+    `);
+    database.prepare("UPDATE metadata SET value = '10' WHERE key = 'schema_version'").run();
+    database.close();
+
+    database = openStateDatabase(config);
+    assert.equal(database.prepare("SELECT value FROM metadata WHERE key = 'schema_version'").get().value, "11");
+    assert.equal(database.prepare("SELECT count(*) AS n FROM semantic_execution_event").get().n, 1);
+    assert.match(
+      database.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'semantic_execution_event'").get().sql,
+      /mcp-operation/u
+    );
+    putSemanticExecutionEvent(database, {
+      ...base,
+      eventId: "0".repeat(64),
+      targetKind: "mcp-operation",
+      operationId: "calculus.derivative",
+      toolName: "math.run"
+    });
+    assert.equal(database.prepare("SELECT count(*) AS n FROM semantic_execution_event").get().n, 2);
+    database.close();
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("an additive dogfood schema 12 marker is normalized so a v11 rollback reader remains usable", () => {
+  const root = temporaryRoot();
+  try {
+    const { config } = fixtureConfig(root);
+    let database = openStateDatabase(config);
+    database.prepare("UPDATE metadata SET value = '12' WHERE key = 'schema_version'").run();
+    database.close();
+    database = openStateDatabase(config);
+    assert.equal(database.prepare("SELECT value FROM metadata WHERE key = 'schema_version'").get().value, "11");
+    assert.equal(database.prepare("SELECT count(*) AS n FROM agent_host_deployment_observation").get().n, 0);
     database.close();
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

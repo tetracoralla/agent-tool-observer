@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { fixtureConfig, temporaryRoot } from "./helpers.mjs";
-import { copyRuntimeBundle, installLaunchAgent, prepareOwnerLogFiles, purgeStateDirectory, renderLaunchAgent } from "../src/installer.mjs";
+import { copyRuntimeBundle, installLaunchAgent, prepareOwnerLogFiles, purgeStateDirectory, renderLaunchAgent, resolveStableNodePath } from "../src/installer.mjs";
 
 test("LaunchAgent runs one fixed short-lived collector without KeepAlive or shell", () => {
   const plist = renderLaunchAgent({
@@ -34,6 +34,18 @@ test("install dry-run performs no filesystem mutation", () => {
     const result = installLaunchAgent(config, { dryRun: true, homeDirectory: fakeHome });
     assert.equal(result.status, "dry-run");
     assert.equal(fs.existsSync(fakeHome), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("an explicit release Node is selected without falling back to a machine installation", () => {
+  const root = temporaryRoot();
+  try {
+    const nodePath = path.join(root, "release-node");
+    fs.writeFileSync(nodePath, "release node", { mode: 0o700 });
+    assert.equal(resolveStableNodePath(nodePath), path.resolve(nodePath));
+    assert.throws(() => resolveStableNodePath(path.join(root, "missing-node")), { code: "NODE_EXECUTABLE_INVALID" });
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

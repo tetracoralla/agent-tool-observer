@@ -19,6 +19,7 @@ function runtimeStatus(value) {
 function createCodexParser({ database, sourceId, recordedAtMs }) {
   let sessionId = sourceId;
   let hasSessionContext = false;
+  let sessionStartedAtMs = null;
   let turnId = null;
   let writes = 0;
   const callNames = new Map();
@@ -34,6 +35,7 @@ function createCodexParser({ database, sourceId, recordedAtMs }) {
       sessionHash: hashIdentifier("codex-session", sessionId),
       turnHash: hashIdentifier("codex-turn", turnId),
       callHash: hashIdentifier("codex-call", `${callId}:${derivedIndex}`),
+      sessionStartedAtMs,
       occurredAtMs,
       completedAtMs: status === "completed" || status === "error" || status === "cancelled" ? occurredAtMs : null,
       ...normalized,
@@ -68,6 +70,8 @@ function createCodexParser({ database, sourceId, recordedAtMs }) {
           sessionId = candidate;
           hasSessionContext = true;
         }
+        const started = timestampMs(record.timestamp ?? payload.timestamp);
+        if (started !== null) sessionStartedAtMs = sessionStartedAtMs === null ? started : Math.min(sessionStartedAtMs, started);
         return;
       }
       if (record.type === "turn_context" && payload && typeof payload === "object") {

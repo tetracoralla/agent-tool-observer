@@ -23,10 +23,18 @@
 8. Direct Runtime input is an exact owner-only regular JSONL file. Events use a
    closed versioned schema and contain only hashed execution identity, semantic
    target/provider identity, state, timing, digests, session state, and numeric
-   payload sizes. Unknown fields or versions fail closed before cursor advance.
+   payload sizes. A projected MCP target retains both tool and operation id;
+   schema migration preserves earlier semantic rows. Unknown fields or versions
+   fail closed before cursor advance.
 9. Context Surface input is one explicit bounded Analyzer result. Tool catalog,
    descriptions, and schemas are not persisted, and import never claims the
    snapshot matches the current installed host.
+10. Agent Host deployment input is one explicit bounded regular non-symlinked
+    file with a closed schema. It may store release/component/tool-binding and
+    catalog identities, but never component paths, commands, task content,
+    arguments, or results. Duplicate semantic tool bindings fail closed.
+    Re-observing one unchanged activated deployment updates its observation
+    timestamp without accumulating another semantic row.
 
 ## Bounds
 
@@ -46,6 +54,9 @@
    without storing a provider row identifier.
 8. Direct Runtime JSONL uses the same line, depth, byte, wall-time, replacement,
    incomplete-line, and idempotency bounds as other JSONL sources.
+9. Retention is at least the report lookback. Maintenance deletes only expired
+   event rows, preserves each source's latest Context Surface row and the
+   current Agent Host deployment, checkpoints the WAL, and compacts SQLite.
 
 ## Claims
 
@@ -75,6 +86,18 @@
     call. Context Surface import establishes only measurements of the named
     explicit snapshot. Neither establishes current installation, correctness,
     value, opportunity, routing quality, authorization, or general benefit.
+11. A matching Agent Host deployment observation establishes only one declared
+    release binding. A current-release correlation candidate requires a
+    provider-scoped recorded session start at or after activation and a matching
+    declared tool name; this is not causal attribution or proof of the catalog
+    loaded by that host. Codex session metadata, the earliest observed Claude
+    session-record timestamp, and ZCode `session.time_created` are distinct
+    declared bases. Pre-activation and unknown-start calls remain separate.
+    Bounded fresh-session tool order can report first-tool, preceding
+    shell/orchestration, retry, error, and observed recovery metadata, but the
+    report must expose both its source-event and returned-record bounds and must
+    not label the returned record count as total turns. It does not establish
+    opportunity, routing quality, task correctness, or user value.
 
 ## Automatic installation
 
@@ -103,8 +126,15 @@
 - schema/privacy and network-import contract checks;
 - CLI smoke with fixture providers;
 - Direct Runtime success, provider error, host error, sink failure, schema
-  drift, privacy, payload-byte, and idempotency cases;
+  drift, projected-operation identity, schema migration, privacy, payload-byte,
+  and idempotency cases;
 - explicit Context Surface import, deduplication, and no-catalog-retention case;
+- Agent Host deployment ingestion, semantic refresh deduplication, provider
+  session-start coverage, bounded-routing disclosure, exact release
+  correlation, unknown-field, duplicate-binding, privacy, and stale-catalog
+  cases;
+- retention preview/application, latest-snapshot preservation, WAL checkpoint,
+  and database compaction cases;
 - wrapper/derived-sequence negative regression;
 - content-addressed installation immutability regression;
 - installed `launchctl` state plus a new automatic collection timestamp;

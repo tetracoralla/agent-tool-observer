@@ -1,7 +1,14 @@
-import { databaseStats, directRuntimeHealth, latestCollection, providerHealth } from "./db-read.mjs";
+import {
+  databaseStats,
+  directRuntimeHealth,
+  latestAgentHostDeployment,
+  latestCollection,
+  providerHealth
+} from "./db-read.mjs";
 
 export function buildStatus(database, config) {
   const directRuntime = directRuntimeHealth(database);
+  const deployment = latestAgentHostDeployment(database);
   return {
     state: databaseStats(database),
     latestCollection: latestCollection(database),
@@ -31,6 +38,14 @@ export function buildStatus(database, config) {
       backlogSources: Number(directRuntime.backlog_sources),
       scannedAtMs: Number(directRuntime.scanned_at_ms)
     }] : [],
+    currentAgentHostDeployment: deployment ? {
+      observedAtMs: Number(deployment.observed_at_ms),
+      activatedAtMs: Number(deployment.activated_at_ms),
+      channel: deployment.channel,
+      releaseId: deployment.release_id,
+      suiteVersion: deployment.suite_version,
+      profile: deployment.profile
+    } : null,
     automaticIntervalSeconds: 300,
     databasePath: config.databasePath,
     privacy: { rawContentStored: false, sourcePathsStored: false, networkUsed: false, modelCalls: 0 }
@@ -49,5 +64,6 @@ export function renderStatus(status) {
     lines.push(`${source.source}: ${source.status}${source.errorCode ? ` (${source.errorCode})` : ""}`);
   }
   lines.push("Privacy: metadata only; no source paths/raw content; no network/model calls.");
+  lines.splice(2, 0, `Current Agent Host deployment: ${status.currentAgentHostDeployment?.releaseId ?? "not observed"}`);
   return `${lines.join("\n")}\n`;
 }
