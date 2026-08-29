@@ -160,6 +160,7 @@ export function scanZcode({ database, config, minimumMtimeMs, scannedAtMs, deadl
         "cache_read_input_tokens", "computed_total_tokens"
       ]);
     if (!supported) return { ...health, status: "error", errorCode: "SOURCE_SCHEMA_UNSUPPORTED" };
+    const hasSessionStart = hasTable(source, "session") && hasColumns(source, "session", ["id", "time_created"]);
 
     const sourceFingerprint = hashIdentifier("zcode-source-identity", `${stat.dev}:${stat.ino}`);
     const toolBounds = checkpointBounds(database, "tool_usage", sourceFingerprint, minimumMtimeMs);
@@ -167,11 +168,14 @@ export function scanZcode({ database, config, minimumMtimeMs, scannedAtMs, deadl
     const { toolLimit, usageLimit } = streamAllowances(config.limits.maxLinesPerRun);
     const toolAllocation = splitNewAndRefresh(toolLimit, toolBounds.exists);
     const usageAllocation = splitNewAndRefresh(usageLimit, usageBounds.exists);
+    const sessionStartColumn = (table) => hasSessionStart
+      ? `(SELECT time_created FROM session AS session_source WHERE session_source.id = ${table}.session_id LIMIT 1) AS session_started_at`
+      : "NULL AS session_started_at";
     const toolColumns = `id, session_id, turn_id, tool_call_id, tool_name, status,
-      started_at, completed_at, duration_ms, retry_count`;
+      started_at, completed_at, duration_ms, retry_count, ${sessionStartColumn("tool_usage")}`;
     const usageColumns = `id, session_id, turn_id, status, started_at, completed_at,
       duration_ms, input_tokens, output_tokens, reasoning_tokens,
-      cache_read_input_tokens, computed_total_tokens`;
+      cache_read_input_tokens, computed_total_tokens, ${sessionStartColumn("model_usage")}`;
     const toolNewCandidates = readNewRows(source, "tool_usage", toolColumns, toolBounds, toolAllocation.newLimit);
     const toolRefreshCandidates = readRefreshRows(source, "tool_usage", toolColumns, toolBounds, toolAllocation.refreshLimit);
     const usageNewCandidates = readNewRows(source, "model_usage", usageColumns, usageBounds, usageAllocation.newLimit);
@@ -195,6 +199,7 @@ export function scanZcode({ database, config, minimumMtimeMs, scannedAtMs, deadl
         sessionHash: hashIdentifier("zcode-session", row.session_id),
         turnHash: hashIdentifier("zcode-turn", row.turn_id),
         callHash: hashIdentifier("zcode-call", row.tool_call_id),
+        sessionStartedAtMs: nonNegativeInteger(row.session_started_at),
         occurredAtMs: nonNegativeInteger(row.started_at),
         completedAtMs: nonNegativeInteger(row.completed_at),
         ...normalized,

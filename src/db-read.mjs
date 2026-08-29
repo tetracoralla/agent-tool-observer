@@ -24,6 +24,7 @@ export function databaseStats(database) {
     capabilityEvents: Number(database.prepare("SELECT count(*) AS value FROM capability_event").get().value),
     semanticExecutionEvents: Number(database.prepare("SELECT count(*) AS value FROM semantic_execution_event").get().value),
     contextSurfaceMeasurements: Number(database.prepare("SELECT count(*) AS value FROM context_surface_measurement").get().value),
+    agentHostDeploymentObservations: Number(database.prepare("SELECT count(*) AS value FROM agent_host_deployment_observation").get().value),
     directRuntimeSources: Number(database.prepare("SELECT count(*) AS value FROM direct_runtime_cursor").get().value),
     sources: Number(database.prepare("SELECT count(*) AS value FROM source_cursor").get().value)
   };
@@ -189,6 +190,46 @@ export function latestContextSurfaceRows(database) {
   `).all();
 }
 
+export function latestAgentHostDeployment(database) {
+  return database.prepare(`
+    SELECT * FROM agent_host_deployment_observation
+    ORDER BY activated_at_ms DESC, observed_at_ms DESC, deployment_id DESC
+    LIMIT 1
+  `).get() ?? null;
+}
+
+export function deploymentToolRows(database, activatedAtMs) {
+  return database.prepare(`
+    SELECT
+      provider,
+      tool_name,
+      count(*) AS calls,
+      sum(CASE WHEN session_started_at_ms >= ? THEN 1 ELSE 0 END) AS fresh_session_calls,
+      sum(CASE WHEN session_started_at_ms < ? THEN 1 ELSE 0 END) AS pre_activation_session_calls,
+      sum(CASE WHEN session_started_at_ms IS NULL THEN 1 ELSE 0 END) AS unknown_session_start_calls
+    FROM tool_event
+    WHERE occurred_at_ms >= ?
+    GROUP BY provider, tool_name
+    ORDER BY calls DESC, provider, tool_name
+  `).all(activatedAtMs, activatedAtMs, activatedAtMs);
+}
+
+export function deploymentRoutingEvents(database, activatedAtMs) {
+  return database.prepare(`
+    SELECT
+      provider, session_hash, turn_hash, tool_name, route_class, status,
+      retry_count, occurred_at_ms, event_id
+    FROM tool_event
+    WHERE occurred_at_ms >= ?
+      AND session_started_at_ms >= ?
+      AND session_hash IS NOT NULL
+      AND turn_hash IS NOT NULL
+      AND derived = 0
+    ORDER BY provider, session_hash, turn_hash, occurred_at_ms, event_id
+    LIMIT 50001
+  `).all(activatedAtMs, activatedAtMs);
+}
+
 export function toolSequenceEvents(database, cutoffMs, openAdamOnly = false) {
   return database.prepare(`
     SELECT provider, session_hash, turn_hash, tool_name, occurred_at_ms, event_id
@@ -216,6 +257,7 @@ export function schemaColumns(database) {
     "procedure_event", "capability_event",
     "direct_runtime_cursor", "direct_runtime_health", "semantic_execution_event",
     "context_surface_measurement",
+    "agent_host_deployment_observation",
     "provider_health", "collection_run",
     "collector_lease"
   ];

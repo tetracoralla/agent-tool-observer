@@ -406,3 +406,19 @@ test("schema v10 migration preserves semantic observations and admits projected 
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("an additive dogfood schema 12 marker is normalized so a v11 rollback reader remains usable", () => {
+  const root = temporaryRoot();
+  try {
+    const { config } = fixtureConfig(root);
+    let database = openStateDatabase(config);
+    database.prepare("UPDATE metadata SET value = '12' WHERE key = 'schema_version'").run();
+    database.close();
+    database = openStateDatabase(config);
+    assert.equal(database.prepare("SELECT value FROM metadata WHERE key = 'schema_version'").get().value, "11");
+    assert.equal(database.prepare("SELECT count(*) AS n FROM agent_host_deployment_observation").get().n, 0);
+    database.close();
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

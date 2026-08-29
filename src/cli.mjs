@@ -3,11 +3,13 @@ import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { collect } from "./collector.mjs";
+import { ingestAgentHostDeployment } from "./agent-host-deployment.mjs";
 import { resolveConfig } from "./config.mjs";
 import { ingestContextSurfaceAnalysis } from "./context-surface.mjs";
 import { openReadOnlyStateDatabase, openStateDatabase } from "./db.mjs";
 import { ObserverError } from "./errors.mjs";
 import { installLaunchAgent, purgeStateDirectory, uninstallLaunchAgent } from "./installer.mjs";
+import { maintainDatabase } from "./maintenance.mjs";
 import { buildReport, isCurrentReport, renderReport } from "./report.mjs";
 import { ingestProcedureReceipts } from "./semantic-receipts.mjs";
 import { readSnapshot, writeSnapshot } from "./snapshot.mjs";
@@ -22,6 +24,8 @@ function usage() {
   agent-tool-observer report [--days N] [--openadam] [--json]
   agent-tool-observer ingest-receipts --file FILE [--json]
   agent-tool-observer ingest-context-surface --file FILE [--json]
+  agent-tool-observer ingest-agent-host-deployment --file FILE [--json]
+  agent-tool-observer maintain [--dry-run] [--json]
   agent-tool-observer install [--dry-run] [--json]
   agent-tool-observer uninstall [--json]
   agent-tool-observer purge --confirm-local-data-removal [--json]
@@ -68,10 +72,11 @@ function parseArguments(argumentsList) {
   if (options.quiet && options.command !== "collect") {
     throw new ObserverError("ARGUMENT_INVALID", "--quiet is supported only by collect");
   }
-  if (["ingest-receipts", "ingest-context-surface"].includes(options.command) && options.file === null) {
+  const ingestionCommands = ["ingest-receipts", "ingest-context-surface", "ingest-agent-host-deployment"];
+  if (ingestionCommands.includes(options.command) && options.file === null) {
     throw new ObserverError("ARGUMENT_INVALID", `${options.command} requires --file`);
   }
-  if (options.file !== null && !["ingest-receipts", "ingest-context-surface"].includes(options.command)) {
+  if (options.file !== null && !ingestionCommands.includes(options.command)) {
     throw new ObserverError("ARGUMENT_INVALID", "--file is supported only by ingestion commands");
   }
   if (options.confirmLocalDataRemoval && options.command !== "purge") {
@@ -140,6 +145,25 @@ export async function main(argumentsList = process.argv.slice(2)) {
       database.close();
     }
   }
+  if (options.command === "maintain") {
+    const database = openStateDatabase(config);
+    try {
+      const result = maintainDatabase(database, config, { dryRun: options.dryRun });
+      if (!options.dryRun) {
+        writeSnapshot(config, "latest-report.json", buildReport(database, { days: config.limits.lookbackDays }));
+        writeSnapshot(config, "latest-status.json", buildStatus(database, config));
+      }
+      if (options.json) printJson(result);
+      else process.stdout.write(
+        options.dryRun
+          ? `Maintenance preview: ${Object.values(result.eligible).reduce((sum, value) => sum + value, 0)} rows eligible; no data changed.\n`
+          : `Maintenance completed: ${Object.values(result.removed).reduce((sum, value) => sum + value, 0)} rows removed; ${result.reclaimedFileBytes ?? "unknown"} database bytes reclaimed.\n`
+      );
+      return 0;
+    } finally {
+      database.close();
+    }
+  }
   if (options.command === "ingest-receipts") {
     const database = openStateDatabase(config);
     try {
@@ -182,6 +206,31 @@ export async function main(argumentsList = process.argv.slice(2)) {
       if (options.json) printJson(result);
       else process.stdout.write(
         `Context Surface ingestion ${result.status}: ${result.measurementsWritten} explicit measurement written; raw catalog and schemas not stored.\n`
+      );
+      return 0;
+    } finally {
+      database.close();
+    }
+  }
+  if (options.command === "ingest-agent-host-deployment") {
+    const database = openStateDatabase(config);
+    try {
+      const result = ingestAgentHostDeployment(database, options.file);
+      try {
+        writeSnapshot(config, "latest-report.json", buildReport(database, { days: 30 }));
+        writeSnapshot(config, "latest-status.json", buildStatus(database, config));
+        result.snapshots = { status: "completed" };
+      } catch (error) {
+        result.status = "partial";
+        result.snapshots = {
+          status: "error",
+          errorCode: error instanceof ObserverError ? error.code : "SNAPSHOT_WRITE_FAILED",
+          ingestionCommitted: true
+        };
+      }
+      if (options.json) printJson(result);
+      else process.stdout.write(
+        `Agent Host deployment ingestion ${result.status}: ${result.deploymentsWritten} immutable release observation written; raw content and source paths not stored.\n`
       );
       return 0;
     } finally {

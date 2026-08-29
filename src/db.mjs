@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS tool_event (
   session_hash TEXT,
   turn_hash TEXT,
   call_hash TEXT,
+  session_started_at_ms INTEGER CHECK (session_started_at_ms IS NULL OR session_started_at_ms >= 0),
   occurred_at_ms INTEGER CHECK (occurred_at_ms IS NULL OR occurred_at_ms >= 0),
   completed_at_ms INTEGER CHECK (completed_at_ms IS NULL OR completed_at_ms >= 0),
   tool_name TEXT NOT NULL CHECK (length(tool_name) BETWEEN 1 AND 256),
@@ -210,6 +211,26 @@ CREATE TABLE IF NOT EXISTS context_surface_measurement (
 
 CREATE INDEX IF NOT EXISTS context_surface_source_idx ON context_surface_measurement(source_id, imported_at_ms);
 
+CREATE TABLE IF NOT EXISTS agent_host_deployment_observation (
+  deployment_id TEXT PRIMARY KEY CHECK (length(deployment_id) = 64),
+  observed_at_ms INTEGER NOT NULL CHECK (observed_at_ms >= 0),
+  activated_at_ms INTEGER NOT NULL CHECK (activated_at_ms >= 0),
+  channel TEXT NOT NULL CHECK (channel IN ('release', 'development')),
+  release_id TEXT CHECK (release_id IS NULL OR length(release_id) BETWEEN 1 AND 200),
+  suite_version TEXT NOT NULL CHECK (length(suite_version) BETWEEN 1 AND 100),
+  profile TEXT NOT NULL CHECK (length(profile) BETWEEN 1 AND 100),
+  components_json TEXT NOT NULL CHECK (length(components_json) BETWEEN 2 AND 131072),
+  context_source_id TEXT CHECK (context_source_id IS NULL OR length(context_source_id) BETWEEN 1 AND 200),
+  context_source_revision TEXT CHECK (context_source_revision IS NULL OR length(context_source_revision) BETWEEN 1 AND 200),
+  context_catalog_sha256 TEXT CHECK (context_catalog_sha256 IS NULL OR length(context_catalog_sha256) = 64),
+  context_catalog_bytes INTEGER CHECK (context_catalog_bytes IS NULL OR context_catalog_bytes >= 0),
+  context_tool_count INTEGER CHECK (context_tool_count IS NULL OR context_tool_count >= 0),
+  source_format TEXT NOT NULL CHECK (source_format = 'openadam.agent-host-deployment-observation.v0.1')
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS agent_host_deployment_time_idx
+ON agent_host_deployment_observation(activated_at_ms, observed_at_ms);
+
 CREATE TABLE IF NOT EXISTS provider_health (
   provider TEXT PRIMARY KEY CHECK (provider IN ('codex', 'claude', 'zcode')),
   status TEXT NOT NULL CHECK (status IN ('ok', 'partial', 'missing', 'error', 'disabled')),
@@ -303,6 +324,19 @@ function migrateSemanticExecutionTargets(database) {
   `);
 }
 
+function ensureAdditiveToolColumns(database) {
+  const columns = new Set(
+    database.prepare("PRAGMA table_info(tool_event)").all().map((row) => row.name)
+  );
+  if (!columns.has("session_started_at_ms")) {
+    database.exec(`
+      ALTER TABLE tool_event
+      ADD COLUMN session_started_at_ms INTEGER
+      CHECK (session_started_at_ms IS NULL OR session_started_at_ms >= 0)
+    `);
+  }
+}
+
 export function openStateDatabase(config) {
   ensureOwnerDirectory(config.stateDir);
   ensureOwnerDirectory(config.logsDir);
@@ -375,10 +409,16 @@ export function openStateDatabase(config) {
       database.close();
       throw error;
     }
+  } else if (storedVersion === "12") {
+    // The deployment-observation table is purely additive and older v11
+    // readers safely ignore it. An early dogfood candidate unnecessarily
+    // promoted the metadata version; normalize it so rollback keeps working.
+    database.prepare("UPDATE metadata SET value = ? WHERE key = 'schema_version'").run(SCHEMA_VERSION);
   } else if (storedVersion !== SCHEMA_VERSION) {
     database.close();
     throw new ObserverError("SCHEMA_VERSION_UNSUPPORTED", "Observer database schema version is not supported");
   }
+  ensureAdditiveToolColumns(database);
   if (!databaseExisted) fs.chmodSync(config.databasePath, 0o600);
   const databaseMode = fs.lstatSync(config.databasePath).mode;
   if ((databaseMode & 0o077) !== 0) {
@@ -483,15 +523,20 @@ export function putProviderCheckpoint(database, checkpoint) {
 export function putToolEvent(database, event) {
   const result = database.prepare(`
     INSERT INTO tool_event(
-      event_id, provider, source_id, session_hash, turn_hash, call_hash,
+      event_id, provider, source_id, session_hash, turn_hash, call_hash, session_started_at_ms,
       occurred_at_ms, completed_at_ms, tool_name, tool_namespace, route_class,
       is_openadam, derived, status, duration_ms, retry_count, request_bytes,
       response_bytes, source_format, recorded_at_ms
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(event_id) DO UPDATE SET
       tool_namespace = excluded.tool_namespace,
       route_class = excluded.route_class,
       is_openadam = excluded.is_openadam,
+      session_started_at_ms = CASE
+        WHEN tool_event.session_started_at_ms IS NULL THEN excluded.session_started_at_ms
+        WHEN excluded.session_started_at_ms IS NULL THEN tool_event.session_started_at_ms
+        ELSE min(tool_event.session_started_at_ms, excluded.session_started_at_ms)
+      END,
       completed_at_ms = COALESCE(excluded.completed_at_ms, tool_event.completed_at_ms),
       status = CASE
         WHEN excluded.status IN ('completed', 'error', 'cancelled') THEN excluded.status
@@ -506,6 +551,10 @@ export function putToolEvent(database, event) {
       excluded.tool_namespace IS NOT tool_event.tool_namespace
       OR excluded.route_class IS NOT tool_event.route_class
       OR excluded.is_openadam IS NOT tool_event.is_openadam
+      OR (excluded.session_started_at_ms IS NOT NULL AND (
+        tool_event.session_started_at_ms IS NULL
+        OR excluded.session_started_at_ms < tool_event.session_started_at_ms
+      ))
       OR (excluded.completed_at_ms IS NOT NULL AND excluded.completed_at_ms IS NOT tool_event.completed_at_ms)
       OR (excluded.status IN ('completed', 'error', 'cancelled') AND excluded.status IS NOT tool_event.status)
       OR (excluded.duration_ms IS NOT NULL AND excluded.duration_ms IS NOT tool_event.duration_ms)
@@ -519,6 +568,7 @@ export function putToolEvent(database, event) {
     event.sessionHash ?? null,
     event.turnHash ?? null,
     event.callHash ?? null,
+    event.sessionStartedAtMs ?? null,
     event.occurredAtMs ?? null,
     event.completedAtMs ?? null,
     event.toolName,
@@ -535,6 +585,18 @@ export function putToolEvent(database, event) {
     event.recordedAtMs
   );
   return result.changes > 0 ? 1 : 0;
+}
+
+export function applySessionStartObservation(database, provider, sessionHash, sessionStartedAtMs) {
+  if (sessionHash === null || sessionHash === undefined || sessionStartedAtMs === null || sessionStartedAtMs === undefined) return 0;
+  const result = database.prepare(`
+    UPDATE tool_event
+    SET session_started_at_ms = ?
+    WHERE provider = ?
+      AND session_hash = ?
+      AND (session_started_at_ms IS NULL OR session_started_at_ms > ?)
+  `).run(sessionStartedAtMs, provider, sessionHash, sessionStartedAtMs);
+  return Number(result.changes);
 }
 
 export function completeToolEvent(database, eventId, status, completedAtMs, responseBytes = null) {
@@ -690,6 +752,37 @@ export function putContextSurfaceMeasurement(database, measurement) {
     JSON.stringify(measurement.tokenMeasurements),
     measurement.sourceFormat,
     measurement.importedAtMs
+  );
+  return result.changes > 0 ? 1 : 0;
+}
+
+export function putAgentHostDeploymentObservation(database, deployment) {
+  const context = deployment.context ?? {};
+  const result = database.prepare(`
+    INSERT INTO agent_host_deployment_observation(
+      deployment_id, observed_at_ms, activated_at_ms, channel, release_id,
+      suite_version, profile, components_json, context_source_id,
+      context_source_revision, context_catalog_sha256, context_catalog_bytes,
+      context_tool_count, source_format
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(deployment_id) DO UPDATE SET
+      observed_at_ms = max(agent_host_deployment_observation.observed_at_ms, excluded.observed_at_ms)
+    WHERE excluded.observed_at_ms > agent_host_deployment_observation.observed_at_ms
+  `).run(
+    deployment.deploymentId,
+    deployment.observedAtMs,
+    deployment.activatedAtMs,
+    deployment.channel,
+    deployment.releaseId ?? null,
+    deployment.suiteVersion,
+    deployment.profile,
+    JSON.stringify(deployment.components),
+    context.sourceId ?? null,
+    context.sourceRevision ?? null,
+    context.catalogSha256 ?? null,
+    context.catalogBytes ?? null,
+    context.toolCount ?? null,
+    deployment.sourceFormat
   );
   return result.changes > 0 ? 1 : 0;
 }

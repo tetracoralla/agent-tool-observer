@@ -1,17 +1,18 @@
 # Current status
 
-Verified on 2026-08-25 on the owner Mac.
+Verified on 2026-08-28 on the owner Mac.
 
 ## Development regression: PASS
 
 - `npm run check`: PASS;
-- 46 Node tests cover all three Agent-shell adapters, Direct Runtime metadata,
+- 54 Node tests cover all three Agent-shell adapters, Direct Runtime metadata,
   Context Surface import, idempotency, active-lease
   exclusion, partial lines, malformed/deep/oversized records, truncation,
   symlink rejection, privacy projection, conservative report claims,
   code-text false-positive exclusion, schema migration and taxonomy repair,
   provider-schema drift, bounded ZCode pagination and timestamp ties,
-  fail-closed Codex context recovery, session-scoped call correlation,
+  fail-closed Codex context recovery, cross-provider session-start correlation,
+  bounded routing truncation, semantic deployment refresh deduplication,
   LaunchAgent rendering, content-addressed runtime installation, owner-only log
   targets, payload-size projection, shared-turn token association, and the
   wrapper/derived Procedure-candidate negative case;
@@ -44,6 +45,10 @@ Verified on 2026-08-25 on the owner Mac.
   a settled source now produces zero repeated event writes while terminal-state
   transitions remain refreshable;
 - Codex: PASS, current source is caught up with no backlog or skipped lines;
+- fresh-session basis is explicit per provider: Codex session metadata, the
+  earliest observed Claude session record, and ZCode `session.time_created`
+  when that source table exists. Unknown starts remain separate rather than
+  becoming zero or fresh;
 - Direct Runtime metadata: PASS, one owner-only exact JSONL source is caught up;
   715 actual local-pilot calls are stored as semantic execution metadata across
   Math Anchor, Migratory Time, Dependency Preflight, and Structured Data
@@ -63,7 +68,7 @@ Verified on 2026-08-25 on the owner Mac.
   snapshot, log, and plist targets; no tool-repository write path exists;
 - installer and snapshot failures report committed side effects explicitly.
 
-The v0.3 report now marks dynamic payload-byte coverage and shared-turn token
+The v0.4 report marks dynamic payload-byte coverage and shared-turn token
 association as partial, rather than treating missing rows as zero. Existing
 history predates payload-byte collection; current Codex coverage begins with
 newly observed `exec` envelopes. Direct Runtime events provide per-semantic-call
@@ -72,9 +77,11 @@ because compatible model and pricing identity are not observed per tool call.
 
 ## Claim boundary
 
-The current report supports observed-use and runtime-error signals. It does not
-produce weaken-routing or retirement candidates until comparable opportunity,
-routing-mode observations and a controlled evaluation assessment exist.
+The current report supports observed-use and runtime-error signals. Its
+fresh-session and bounded-routing fields are deterministic correlations, not
+an adoption, opportunity, causation, correctness, or task-quality assessment.
+Those judgments remain outside Observer and require current task context in an
+external Agent or reviewer.
 
 ## Business/experience acceptance
 
