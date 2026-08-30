@@ -69,38 +69,12 @@ try {
   assert.equal(collection.rawContentStored, false);
   assert.equal(collection.networkUsed, false);
   assert.equal(collection.modelCalls, 0);
-  const receiptPath = path.join(temporary, "procedure-receipt.json");
-  fs.writeFileSync(receiptPath, JSON.stringify({
-    schemaVersion: "openadam.procedure-receipt.v0.1",
-    procedureId: "org.openadam.structured-data.preflight",
-    procedureVersion: "0.1.0",
-    invocationId: "smoke-private-id",
-    implementation: { id: "org.openadam.structured-data-preflight", version: "0.1.0" },
-    outcome: "success",
-    startedAt: timestamp,
-    completedAt: timestamp,
-    inputDigest: `sha256:${"a".repeat(64)}`,
-    outputDigest: `sha256:${"b".repeat(64)}`,
-    stages: [{
-      stageId: "inspect-file",
-      status: "success",
-      capability: { id: "org.openadam.file.inspect", version: "0.1.0", operationId: "inspect" },
-      provider: { id: "io.github.tetracoralla.universal-inspector", version: "0.1.0" },
-      binding: { transport: "mcp-tool", target: "file_inspect" },
-      durationMs: 1,
-      effects: ["read"]
-    }]
-  }), { mode: 0o600 });
-  const ingestion = run("ingest-receipts", "--file", receiptPath, "--json");
-  assert.equal(ingestion.proceduresWritten, 1);
-  assert.equal(ingestion.capabilityStagesWritten, 1);
   const report = run("report", "--days", "1", "--json");
   assert.equal(report.tools.length >= 4, true);
   assert.deepEqual(report.portfolio.retireCandidates, []);
-  assert.equal(report.procedures.length, 1);
-  assert.equal(report.capabilities.length, 1);
-  assert.equal(report.capabilities[0].passiveObservedCalls, 1);
-  assert.equal(report.capabilities[0].passiveMappingBasis, "declared-receipt-binding-target");
+  assert.equal(report.schemaVersion, "openadam.agent-tool-observer.report.v0.5");
+  assert.equal("procedures" in report, false);
+  assert.equal("capabilities" in report, false);
   assert.equal(report.privacy.rawContentStored, false);
   const status = run("status", "--json");
   assert.equal(status.providers.length, 3);

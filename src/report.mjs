@@ -1,13 +1,11 @@
 import {
-  capabilityReportRows,
   deploymentRoutingEvents,
   deploymentToolRows,
   directRuntimeHealth,
   latestAgentHostDeployment,
   latestContextSurfaceRows,
-  procedureReportRows,
+  observedSemanticToolNames,
   providerHealth,
-  semanticTargets,
   semanticExecutionReportRows,
   toolReportRows,
   toolSequenceEvents,
@@ -15,7 +13,7 @@ import {
   usageReportRows
 } from "./db-read.mjs";
 
-export const REPORT_SCHEMA_VERSION = "openadam.agent-tool-observer.report.v0.4";
+export const REPORT_SCHEMA_VERSION = "openadam.agent-tool-observer.report.v0.5";
 const ROUTING_EVENT_LIMIT = 50_000;
 const ROUTING_OBSERVATION_LIMIT = 100;
 const SESSION_START_BASIS = Object.freeze({
@@ -369,53 +367,7 @@ export function buildReport(database, options = {}, nowMs = Date.now()) {
         ? "message-usage-total-excludes-separately-reported-cache-read"
         : "provider-reported-model-usage-record"
   }));
-  const procedures = procedureReportRows(database, cutoffMs).map((row) => ({
-    procedureId: row.procedure_id,
-    procedureVersion: row.procedure_version,
-    implementationId: row.implementation_id,
-    implementationVersion: row.implementation_version,
-    runs: Number(row.runs),
-    runtime: {
-      completed: Number(row.completed),
-      errors: Number(row.errors),
-      blocked: Number(row.blocked),
-      rejected: Number(row.rejected),
-      averageDurationMs: numeric(row.average_duration_ms)
-    },
-    firstObservedAtMs: numeric(row.first_observed_at_ms),
-    lastObservedAtMs: numeric(row.last_observed_at_ms),
-    correctnessStatus: "unknown"
-  }));
-  const capabilities = capabilityReportRows(database, cutoffMs).map((row) => {
-    const passiveObservedCalls = row.transport === "mcp-tool"
-      ? tools.filter((tool) => tool.routeClass === "mcp"
-        && toolMatchesBinding(tool.toolName, row.target))
-        .reduce((total, tool) => total + tool.calls, 0)
-      : 0;
-    return {
-      capabilityId: row.capability_id,
-      capabilityVersion: row.capability_version,
-      operationId: row.operation_id,
-      providerId: row.provider_id,
-      providerVersion: row.provider_version,
-      binding: { transport: row.transport, target: row.target },
-      executions: Number(row.executions),
-      passiveObservedCalls,
-      passiveMappingBasis: row.transport === "mcp-tool"
-        ? "declared-receipt-binding-target"
-        : "unavailable-for-transport",
-      runtime: {
-        completed: Number(row.completed),
-        errors: Number(row.errors),
-        skipped: Number(row.skipped),
-        averageDurationMs: numeric(row.average_duration_ms)
-      },
-      firstObservedAtMs: numeric(row.first_observed_at_ms),
-      lastObservedAtMs: numeric(row.last_observed_at_ms),
-      correctnessStatus: "unknown"
-    };
-  });
-  const targets = semanticTargets(database);
+  const targets = observedSemanticToolNames(database);
   const capabilityCandidates = tools
     .filter((tool) => tool.routeClass === "mcp" && tool.calls >= 5
       && !hasSemanticTarget(tool.toolName, targets))
@@ -545,8 +497,6 @@ export function buildReport(database, options = {}, nowMs = Date.now()) {
         reason: "model-and-pricing-identity-not-observed-at-tool-call-granularity"
       }
     },
-    procedures,
-    capabilities,
     semanticExecutions,
     directRuntime: directHealth ? {
       status: directHealth.status,
@@ -572,7 +522,7 @@ export function buildReport(database, options = {}, nowMs = Date.now()) {
       procedureCandidates,
       weakenRoutingCandidates: [],
       retireCandidates: [],
-      claimBoundary: "Legacy receipts record declared execution and binding identity; Direct Runtime events record metadata about actual direct execution; imported Context Surface analyses measure explicit snapshots. Agent Host deployment observations declare one active immutable release. A matching tool name from a provider record whose observed session start is at or after activation is only a current-release correlation candidate, not causal attribution or proof of the catalog loaded by that host; pre-activation and unknown-start sessions remain separate. Fresh-session routing records are bounded metadata records, and their returned count is not a total when either bound is reached. None establishes correctness, adoption opportunity, natural routing, redundancy, retirement, exclusive call attribution, task quality, or authorization."
+      claimBoundary: "Direct Runtime events record metadata about actual direct execution; imported Context Surface analyses measure explicit snapshots. Agent Host deployment observations declare one active immutable release. A matching tool name from a provider record whose observed session start is at or after activation is only a current-release correlation candidate, not causal attribution or proof of the catalog loaded by that host; pre-activation and unknown-start sessions remain separate. Fresh-session routing records are bounded metadata records, and their returned count is not a total when either bound is reached. None establishes correctness, adoption opportunity, natural routing, redundancy, retirement, exclusive call attribution, task quality, or authorization."
     },
     privacy: {
       rawContentStored: false,
@@ -605,7 +555,6 @@ export function renderReport(report) {
   lines.push(
     "",
     `Fix candidates: ${report.portfolio.fixCandidates.length}`,
-    `Legacy semantic receipts: ${(report.procedures ?? []).length} Procedure implementations, ${(report.capabilities ?? []).length} Capability bindings (human-checkpoint fields discarded on read)`,
     `Direct semantic execution groups: ${(report.semanticExecutions ?? []).length}; source=${report.directRuntime?.status ?? "not-collected"}`,
     `Static context snapshots: ${(report.contextSurfaces ?? []).length}; monetary cost=${report.cost?.monetary?.status ?? "unavailable"}`,
     `Current Agent Host deployment: ${report.currentAgentHostDeployment?.releaseId ?? "not observed"}`,

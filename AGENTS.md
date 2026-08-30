@@ -36,8 +36,13 @@ language.
 - Add the smallest negative regression for parser drift, truncation, symlink
   traversal, identifier leakage, duplicate ingestion, source mutation, lock
   overlap, report overclaiming, and installation changes.
+- Do not restore the retired pre-release Procedure receipt or human-checkpoint
+  importer. Current semantic execution observations come from Direct Runtime's
+  closed metadata event; existing legacy database rows are migration residue,
+  not a product input or report authority.
 - Do not commit, push, publish, notify, delete history, or modify another
   repository without explicit owner authorization.
 
-Report development regression, installed automatic runtime, provider coverage,
-and owner business acceptance separately.
+Review the current product before applying the review contract and include one
+independent discovery route. Report development regression, installed automatic
+runtime, provider coverage, and owner business acceptance separately.

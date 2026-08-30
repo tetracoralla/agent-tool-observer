@@ -1,151 +1,120 @@
 # Review contract
 
+Review the current observer as one passive collection, local persistence,
+reporting, and scheduled-runtime product. This contract records durable claim
+boundaries and high-risk seams; it is minimum coverage, not a reasoning script
+or completion runway.
+
+Before following the named checks, reconstruct the current supported source
+families, explicit import surfaces, schemas, report fields, retention behavior,
+and installed LaunchAgent from source and runtime. Perform and report at least
+one independent discovery route derived from those current surfaces rather
+than from this file, test names, prior findings, or the changed-file list.
+Completing every item below cannot by itself end the review.
+
 ## Privacy and authority
 
-1. Production code has no networking import, URL-based source, listener, or
-   model invocation.
-2. Provider files and databases are opened read-only. Tests compare source
-   bytes before and after collection.
-3. Source discovery never follows symlinks and accepts only regular `.jsonl`
-   files beneath exact configured roots.
-4. Persisted schemas contain no prompt, message, reasoning, path, command,
-   argument, input-content, result, output-content, or error-message fields.
-5. All source/session/turn/call/message identifiers are context-hashed before
-   insertion. Unknown strings from records are not copied into health errors.
-6. Explicit Procedure Receipt files are bounded regular non-symlinked files.
-   Receipt invocation IDs are hashed; input/output payloads and digests are not
-   persisted. Only versioned semantic IDs, bindings, runtime state, duration,
-   effects, and stable error codes may enter semantic event tables.
-7. Receipt formats v0.1/v0.2 are legacy. v0.2 human-checkpoint stages are
-   structurally checked and discarded on read; no checkpoint, approval,
-   authority, decision-source, or reviewer state is persisted, aggregated,
-   or reported. Reviewer authentication was never an observer capability.
-8. Direct Runtime input is an exact owner-only regular JSONL file. Events use a
-   closed versioned schema and contain only hashed execution identity, semantic
-   target/provider identity, state, timing, digests, session state, and numeric
-   payload sizes. A projected MCP target retains both tool and operation id;
-   schema migration preserves earlier semantic rows. Unknown fields or versions
-   fail closed before cursor advance.
-9. Context Surface input is one explicit bounded Analyzer result. Tool catalog,
-   descriptions, and schemas are not persisted, and import never claims the
-   snapshot matches the current installed host.
-10. Agent Host deployment input is one explicit bounded regular non-symlinked
-    file with a closed schema. It may store release/component/tool-binding and
-    catalog identities, but never component paths, commands, task content,
-    arguments, or results. Duplicate semantic tool bindings fail closed.
-    Re-observing one unchanged activated deployment updates its observation
-    timestamp without accumulating another semantic row.
+1. Production code has no networking import, URL source, listener, or model
+   invocation.
+2. Provider files and databases are opened read-only. Source discovery never
+   follows symlinks and accepts only regular files beneath exact configured
+   roots. Tests compare representative source bytes before and after collection.
+3. Persisted schemas contain no prompt, message, reasoning, path, command,
+   argument, input/result content, output content, or provider error message.
+   Source, session, turn, call, and message identifiers are context-hashed
+   before insertion.
+4. Direct Runtime input is an exact owner-only regular JSONL file with a closed
+   versioned schema. It retains only hashed execution identity, semantic target
+   and provider identity, state, timing, digests, session state, and numeric
+   payload sizes. A projected MCP target retains tool and operation identity.
+5. Context Surface and Agent Host deployment imports each accept one explicit,
+   bounded, regular non-symlinked file with a closed schema. They do not retain
+   raw catalogs, schemas, component paths, commands, task content, arguments, or
+   results. Duplicate semantic tool bindings fail closed.
+6. Retired pre-release Procedure receipt and human-checkpoint formats are not
+   accepted or projected. Existing private legacy database rows may remain
+   untouched until ordinary retention removes them; they are not a current
+   product source or report authority.
 
-## Bounds
+## Whole-run bounds and recovery
 
-1. One run has limits for files, total bytes, bytes per source, lines, line
-   bytes, JSON depth, and wall time. Total byte and line/row allocations span
-   every enabled source family; a failed source conservatively consumes its
-   allocation before a later source is considered.
-2. A partial final JSONL line does not advance the cursor.
-3. An over-limit line is discarded through its newline without constructing an
-   unbounded string and increments a skipped count.
-4. File truncation or replacement resets the read offset; event IDs keep
-   ingestion idempotent.
-5. Provider failure is isolated and reported with a stable code. One provider
-   cannot overwrite another provider's health.
-6. A settled ZCode source produces zero observer event writes; rows that move
-   from running to a terminal state are still refreshed incrementally.
-7. ZCode queries use bounded pages shared across tool and model streams. A
-   timestamp tie larger than one page progresses through a numeric tie offset
-   without storing a provider row identifier.
-8. Direct Runtime JSONL uses the same line, depth, byte, wall-time, replacement,
-   incomplete-line, and idempotency bounds as other JSONL sources.
-9. Retention is at least the report lookback. Maintenance deletes only expired
-   event rows, preserves each source's latest Context Surface row and the
-   current Agent Host deployment, checkpoints the WAL, and compacts SQLite.
-10. Shared-turn usage association remains indexed by provider, turn, and time;
-    report generation must not degrade into an unindexed event cross-product.
+1. One collection run has cumulative limits for files, bytes, bytes per source,
+   lines or rows, line bytes, JSON depth, and wall time across every enabled
+   source family. A failed source conservatively consumes its allocation.
+2. Partial final JSONL lines do not advance cursors. Over-limit lines are
+   discarded through their newline without constructing an unbounded string.
+3. Truncation or replacement resets the read position; stable event identities
+   keep re-ingestion idempotent.
+4. Provider failures remain isolated with stable codes. A settled ZCode scan
+   writes no new events, while terminal-state transitions still refresh.
+   Timestamp ties larger than one page progress through the bounded numeric
+   offset without persisting provider row identifiers.
+5. Retention is not shorter than report lookback. Maintenance preserves the
+   latest Context Surface measurement per source and current Agent Host
+   deployment, checkpoints the WAL, compacts SQLite, and reports exact eligible
+   rows before mutation.
+6. Shared-turn usage queries remain indexed by provider, turn, and time; report
+   generation must not degrade into an event cross-product.
 
-## Claims
+## Claim boundary
 
-1. Runtime completion is never labeled correctness, success, usefulness, or
-   verification.
-2. Missing status, latency, retry, usage, opportunity, availability, and
-   routing data remain unknown rather than zero.
-3. Zero calls never create `weaken-routing` or `retire-candidate`.
-4. A fix candidate requires a minimum measured-call count and observed runtime
-   error rate. The report exposes the counts supporting the signal.
-5. Passive output can request a targeted `agent-tool-evals` comparison but
-   cannot run one automatically.
-6. Repeated unmapped MCP use and repeated tool sequences may only nominate a
-   Capability-contract or Procedure evaluation. Both keep correctness unknown.
-7. Passive Capability call counts may be mapped only from a binding target
-   declared by a legacy receipt. The observer records that name association as
-   a mapping observation only; it cannot establish provider conformance, task
-   opportunity, or correctness.
-8. Human acceptance and rejection fields in legacy receipts are discarded.
-   They cannot establish current authority or quality; the current owning
-   business system controls its decisions. Reports must keep
-   `correctnessStatus` equal to `unknown`.
-9. Tool payload bytes are measurements, not content or cost. Turn token totals
-   are labeled shared association and never allocated to one tool. Monetary
-   cost remains unavailable without compatible model and pricing identity.
-10. Direct Runtime metadata establishes only what that runtime reports about a
-    call. Context Surface import establishes only measurements of the named
-    explicit snapshot. Neither establishes current installation, correctness,
-    value, opportunity, routing quality, authorization, or general benefit.
-11. A matching Agent Host deployment observation establishes only one declared
-    release binding. A current-release correlation candidate requires a
-    provider-scoped recorded session start at or after activation and a matching
-    declared tool name; this is not causal attribution or proof of the catalog
-    loaded by that host. Codex session metadata, the earliest observed Claude
-    session-record timestamp, and ZCode `session.time_created` are distinct
-    declared bases. Pre-activation and unknown-start calls remain separate.
-    Bounded fresh-session tool order can report first-tool, preceding
-    shell/orchestration, retry, error, and observed recovery metadata, but the
-    report must expose both its source-event and returned-record bounds and must
-    not label the returned record count as total turns. It does not establish
-    opportunity, routing quality, task correctness, or user value.
+1. Runtime completion is never labeled correctness, usefulness, verification,
+   adoption, or user value. Missing status, latency, retry, usage, opportunity,
+   availability, routing, token, and cost data remain unknown rather than zero.
+2. Zero calls never create `weaken-routing` or `retire-candidate`. A fix
+   candidate requires the declared minimum measured-call count and observed
+   runtime error rate, with those counts exposed.
+3. Passive unmapped MCP use or repeated tool sequences may nominate a targeted
+   Capability or Procedure evaluation only. The observer cannot run that
+   evaluation or promote the nomination into a standard.
+4. Payload bytes are measurements, not content or cost. Turn token totals are
+   shared associations, never allocated to one tool. Monetary cost remains
+   unavailable without compatible model and pricing identity.
+5. Direct Runtime metadata establishes only what that runtime reported. Context
+   Surface import measures one explicit snapshot. Agent Host deployment import
+   declares one release binding. None independently establishes installation,
+   causation, correctness, opportunity, routing quality, authorization, or
+   benefit.
+6. Fresh-session correlation uses each provider's declared session-start basis,
+   keeps pre-activation and unknown-start calls separate, and discloses source
+   and returned-record bounds. Returned records are not total turns or causal
+   attribution.
 
 ## Automatic installation
 
-1. Install preflight verifies the fixed absolute Node path and copies the
-   package manifest plus runtime source into an owner-only content-addressed
-   directory. The copy is rehashed before the plist is written.
-2. The plist has no socket, network, shell, model, or tool-repository mutation
-   action. It invokes only quiet `collect` with fixed absolute arguments;
-   successful scheduled runs do not grow an append-only result log.
-3. State and log directories, log files, and snapshots are owner-only; the
-   plist is owner-writable only.
-4. Installation is idempotent and verifies the loaded LaunchAgent after
-   bootstrap.
-5. Uninstall stops only the exact observer label and preserves collected state.
-6. The LaunchAgent path must resolve inside the installed runtime digest, never
-   the mutable development checkout. A source edit cannot change the loaded
-   program until an explicit reinstall selects a new digest.
-7. Command-specific and duplicate CLI options fail before action. In
-   particular, `--dry-run` cannot be silently ignored by collect, ingestion,
+1. Install preflight verifies the fixed absolute Node path, copies the package
+   manifest and runtime source into an owner-only content-addressed directory,
+   rehashes the copy, and only then writes the plist.
+2. The LaunchAgent has no socket, network, shell, model, or tool-repository
+   mutation. It invokes only quiet collection with fixed absolute arguments;
+   successful runs do not grow an append-only result log.
+3. State, logs, snapshots, and plist permissions remain owner-only. Install is
+   idempotent and verifies the loaded service. Uninstall stops only the exact
+   Observer label and preserves local observations.
+4. The loaded program resolves inside the installed runtime digest rather than
+   a mutable checkout. Source edits cannot change automatic collection until an
+   explicit reinstall selects a new digest.
+5. Command-specific, duplicate, retired, and misspelled CLI options fail before
+   action; `--dry-run` cannot be silently ignored by collection, ingestion,
    uninstall, or purge.
 
-## Required validation
+## Validation lanes
 
-- unit and integration tests for all three adapters;
-- repeat collection with no duplicates;
-- append-after-partial-line sequence;
-- malformed, huge-line, truncation, replacement, and symlink cases;
-- source-byte conservation;
-- schema/privacy and network-import contract checks;
-- command-specific option, duplicate-option, configuration spelling, and
-  cross-provider total-budget regressions;
-- current-size report-query baseline plus shared-turn index presence;
-- CLI smoke with fixture providers;
-- Direct Runtime success, provider error, host error, sink failure, schema
-  drift, projected-operation identity, schema migration, privacy, payload-byte,
-  and idempotency cases;
-- explicit Context Surface import, deduplication, and no-catalog-retention case;
-- Agent Host deployment ingestion, semantic refresh deduplication, provider
-  session-start coverage, bounded-routing disclosure, exact release
-  correlation, unknown-field, duplicate-binding, privacy, and stale-catalog
-  cases;
-- retention preview/application, latest-snapshot preservation, WAL checkpoint,
-  and database compaction cases;
-- wrapper/derived-sequence negative regression;
-- content-addressed installation immutability regression;
-- installed `launchctl` state plus a new automatic collection timestamp;
-- unchanged Git status fingerprints for every pre-existing tool repository.
+- **Development regression:** current registered source adapters and explicit
+  importers; repeat collection; partial, malformed, oversized, truncated,
+  replaced, and symlinked sources; source-byte conservation; schema/privacy and
+  network-import checks; cumulative budgets; query-index baseline; CLI smoke;
+  Direct Runtime schema drift and privacy; Context Surface and Agent Host
+  imports; retention, WAL checkpoint, compaction, and immutable installation.
+- **Installed automatic runtime:** loaded LaunchAgent path and digest, current
+  scheduled collection timestamp, provider coverage, bounded snapshots, and
+  non-resident behavior between runs.
+- **Provider coverage and reports:** derive the current source list from code and
+  runtime rather than a fixed adapter count. State freshness, truncation, and
+  unknown fields explicitly.
+- **Owner business acceptance:** whether the passive portfolio view changes a
+  useful decision remains owner judgment, separate from the lanes above.
+
+Every PASS names the current command or flow and observable. End with
+`tools-dev workspace escalations`, including any Agent Host schema consumer,
+Capability/Procedure boundary, installed-runtime, or shared-resource concern.

@@ -11,7 +11,6 @@ import { ObserverError } from "./errors.mjs";
 import { installLaunchAgent, purgeStateDirectory, uninstallLaunchAgent } from "./installer.mjs";
 import { maintainDatabase } from "./maintenance.mjs";
 import { buildReport, isCurrentReport, renderReport } from "./report.mjs";
-import { ingestProcedureReceipts } from "./semantic-receipts.mjs";
 import { readSnapshot, writeSnapshot } from "./snapshot.mjs";
 import { buildStatus, renderStatus } from "./status.mjs";
 
@@ -22,7 +21,6 @@ function usage() {
   agent-tool-observer collect [--json|--quiet]
   agent-tool-observer status [--json]
   agent-tool-observer report [--days N] [--openadam] [--json]
-  agent-tool-observer ingest-receipts --file FILE [--json]
   agent-tool-observer ingest-context-surface --file FILE [--json]
   agent-tool-observer ingest-agent-host-deployment --file FILE [--json]
   agent-tool-observer maintain [--dry-run] [--json]
@@ -99,7 +97,7 @@ export function parseArguments(argumentsList) {
   if (seen.has("--days") && options.command !== "report") {
     throw new ObserverError("ARGUMENT_INVALID", "--days is supported only by report");
   }
-  const ingestionCommands = ["ingest-receipts", "ingest-context-surface", "ingest-agent-host-deployment"];
+  const ingestionCommands = ["ingest-context-surface", "ingest-agent-host-deployment"];
   if (ingestionCommands.includes(options.command) && options.file === null) {
     throw new ObserverError("ARGUMENT_INVALID", `${options.command} requires --file`);
   }
@@ -185,30 +183,6 @@ export async function main(argumentsList = process.argv.slice(2)) {
         options.dryRun
           ? `Maintenance preview: ${Object.values(result.eligible).reduce((sum, value) => sum + value, 0)} rows eligible; no data changed.\n`
           : `Maintenance completed: ${Object.values(result.removed).reduce((sum, value) => sum + value, 0)} rows removed; ${result.reclaimedFileBytes ?? "unknown"} database bytes reclaimed.\n`
-      );
-      return 0;
-    } finally {
-      database.close();
-    }
-  }
-  if (options.command === "ingest-receipts") {
-    const database = openStateDatabase(config);
-    try {
-      const result = ingestProcedureReceipts(database, options.file);
-      try {
-        writeSnapshot(config, "latest-report.json", buildReport(database, { days: 30 }));
-        result.snapshots = { status: "completed" };
-      } catch (error) {
-        result.status = "partial";
-        result.snapshots = {
-          status: "error",
-          errorCode: error instanceof ObserverError ? error.code : "SNAPSHOT_WRITE_FAILED",
-          ingestionCommitted: true
-        };
-      }
-      if (options.json) printJson(result);
-      else process.stdout.write(
-        `Receipt ingestion ${result.status}: ${result.proceduresWritten} Procedures and ${result.capabilityStagesWritten} Capability stages written; ${result.humanCheckpointsDiscarded} legacy human-checkpoint entries discarded; raw content not stored.\n`
       );
       return 0;
     } finally {

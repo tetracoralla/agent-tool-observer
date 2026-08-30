@@ -1,11 +1,11 @@
 # Current status
 
-Verified on 2026-08-30 on the owner Mac.
+Verified on 2026-08-31 on the owner Mac.
 
 ## Development regression: PASS
 
 - `npm run check`: PASS;
-- 60 Node tests cover the Codex, Claude, ZCode, and Direct Runtime adapters;
+- 55 Node tests cover the Codex, Claude, ZCode, and Direct Runtime adapters;
   privacy projection; incremental cursors; malformed, oversized, partial,
   replaced, and symlinked sources; conservative reports; schema migration;
   installed-runtime rendering; content-addressed installation; and retention;
@@ -19,28 +19,29 @@ Verified on 2026-08-30 on the owner Mac.
   or third-party runtime dependencies;
 - fixture CLI smoke completes collection, status, report, and privacy checks.
 
-## Installed automatic runtime: PASS for current public 0.1.1; repaired source pending suite update
+## Installed automatic runtime: PASS for current dogfood 0.2.0
 
 - LaunchAgent label: `com.openadam.agent-tool-observer`;
 - schedule: run at login and every 300 seconds as one short-lived collector,
   with no `KeepAlive`;
-- current loaded program is the owner-only content-addressed Observer 0.1.1
-  runtime `7b3239591cfc264bb2438864deb6b2d7b84dd59e5a253a575f34ec12eb48fcd8`,
+- current loaded program is the owner-only content-addressed Observer 0.2.0
+  component from artifact
+  `sha256:6b29cf337ab103a1e9afd4781c64ae11d359112f7f948719a263ad1a4815ff79`,
   using the Agent Host Suite's fixed Node 22.22.1 runtime;
-- the latest observed automatic run completed in about 1.24 seconds with Codex,
-  Claude, ZCode, and Direct Runtime all `ok`, no backlog, and exit code 0;
-- the 93,442,048-byte SQLite database, status/report snapshots, plist, and logs
-  are owner-only; the service is not resident between scans;
-- the repaired source has a different content digest and has intentionally not
-  replaced the installed runtime before the enclosing Agent Host Suite release
-  is reviewed and activated.
+- the latest installed collection completed with Codex, Claude, ZCode, and
+  Direct Runtime all `ok`, no backlog, and zero Observer network/model calls;
+- the SQLite database, status/report snapshots, plist, and logs remain
+  owner-only; the service is not resident between scans;
+- report v0.5 is active. The retired pre-release receipt importer is absent,
+  legacy Procedure/Capability tables contain zero rows, and semantic execution
+  reporting comes only from Direct Runtime metadata.
 
 ## Provider and Host coverage
 
-- the current database contains 145,547 tool events, 13,596 usage events, and
-  1,023 Direct Runtime semantic execution events;
+- the current database contains 148,011 tool events, 13,603 usage events, and
+  1,083 Direct Runtime semantic execution events;
 - the current Agent Host deployment observation is
-  `local-dogfood-20260830.28` / suite `0.1.1-dogfood.28`;
+  `local-dogfood-20260831.30` / suite `0.1.2-dogfood.30`;
 - the installed Host snapshot reports all four Observer sources `ok` and keeps
   historical calls separate from current-release adoption or task quality;
 - the current installed Agent catalog is 64,804 canonical UTF-8 bytes across
@@ -78,5 +79,5 @@ adoption, opportunity, causation, correctness, or task-quality assessment.
 
 ## Business/experience acceptance
 
-Pending owner use after the repaired Observer is delivered through the reviewed
-Agent Host Suite update. No external telemetry service is part of this product.
+Pending owner use after the installed Agent Host Suite update. No external
+telemetry service is part of this product.
