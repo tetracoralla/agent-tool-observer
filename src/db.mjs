@@ -65,6 +65,7 @@ CREATE INDEX IF NOT EXISTS tool_event_time_idx ON tool_event(occurred_at_ms);
 CREATE INDEX IF NOT EXISTS tool_event_tool_idx ON tool_event(tool_name, occurred_at_ms);
 CREATE INDEX IF NOT EXISTS tool_event_provider_idx ON tool_event(provider, occurred_at_ms);
 CREATE INDEX IF NOT EXISTS tool_event_openadam_idx ON tool_event(is_openadam, occurred_at_ms);
+CREATE INDEX IF NOT EXISTS tool_event_turn_idx ON tool_event(provider, turn_hash, occurred_at_ms);
 
 CREATE TABLE IF NOT EXISTS usage_event (
   event_id TEXT PRIMARY KEY,
@@ -84,6 +85,7 @@ CREATE TABLE IF NOT EXISTS usage_event (
 
 CREATE INDEX IF NOT EXISTS usage_event_time_idx ON usage_event(occurred_at_ms);
 CREATE INDEX IF NOT EXISTS usage_event_provider_idx ON usage_event(provider, occurred_at_ms);
+CREATE INDEX IF NOT EXISTS usage_event_turn_idx ON usage_event(provider, turn_hash, occurred_at_ms);
 
 CREATE TABLE IF NOT EXISTS procedure_event (
   event_id TEXT PRIMARY KEY CHECK (length(event_id) = 64),

@@ -32,7 +32,7 @@ function usage() {
 `;
 }
 
-function parseArguments(argumentsList) {
+export function parseArguments(argumentsList) {
   const command = argumentsList[0];
   if (!command || ["help", "--help", "-h"].includes(command)) return { command: "help" };
   const options = {
@@ -45,20 +45,38 @@ function parseArguments(argumentsList) {
     file: null,
     confirmLocalDataRemoval: false
   };
+  const seen = new Set();
+  const markSeen = (name) => {
+    if (seen.has(name)) throw new ObserverError("ARGUMENT_INVALID", `${name} may appear only once`);
+    seen.add(name);
+  };
   for (let index = 1; index < argumentsList.length; index += 1) {
     const argument = argumentsList[index];
-    if (argument === "--json") options.json = true;
-    else if (argument === "--quiet") options.quiet = true;
-    else if (argument === "--dry-run") options.dryRun = true;
-    else if (argument === "--confirm-local-data-removal") options.confirmLocalDataRemoval = true;
-    else if (argument === "--openadam") options.openAdamOnly = true;
+    if (argument === "--json") {
+      markSeen(argument);
+      options.json = true;
+    } else if (argument === "--quiet") {
+      markSeen(argument);
+      options.quiet = true;
+    } else if (argument === "--dry-run") {
+      markSeen(argument);
+      options.dryRun = true;
+    } else if (argument === "--confirm-local-data-removal") {
+      markSeen(argument);
+      options.confirmLocalDataRemoval = true;
+    } else if (argument === "--openadam") {
+      markSeen(argument);
+      options.openAdamOnly = true;
+    }
     else if (argument === "--days") {
+      markSeen(argument);
       const value = Number(argumentsList[++index]);
       if (!Number.isSafeInteger(value) || value < 1 || value > 3650) {
         throw new ObserverError("ARGUMENT_INVALID", "--days must be an integer from 1 to 3650");
       }
       options.days = value;
     } else if (argument === "--file") {
+      markSeen(argument);
       const value = argumentsList[++index];
       if (!value) throw new ObserverError("ARGUMENT_INVALID", "--file requires a path");
       options.file = path.resolve(value);
@@ -71,6 +89,15 @@ function parseArguments(argumentsList) {
   }
   if (options.quiet && options.command !== "collect") {
     throw new ObserverError("ARGUMENT_INVALID", "--quiet is supported only by collect");
+  }
+  if (options.dryRun && !["install", "maintain"].includes(options.command)) {
+    throw new ObserverError("ARGUMENT_INVALID", "--dry-run is supported only by install and maintain");
+  }
+  if (options.openAdamOnly && options.command !== "report") {
+    throw new ObserverError("ARGUMENT_INVALID", "--openadam is supported only by report");
+  }
+  if (seen.has("--days") && options.command !== "report") {
+    throw new ObserverError("ARGUMENT_INVALID", "--days is supported only by report");
   }
   const ingestionCommands = ["ingest-receipts", "ingest-context-surface", "ingest-agent-host-deployment"];
   if (ingestionCommands.includes(options.command) && options.file === null) {

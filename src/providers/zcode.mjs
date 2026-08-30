@@ -131,7 +131,14 @@ function readRefreshRows(source, table, columns, bounds, limit) {
   `).all(bounds.lastStartedAtMs, bounds.lastScanAtMs, limit + 1);
 }
 
-export function scanZcode({ database, config, minimumMtimeMs, scannedAtMs, deadlineMs = Number.MAX_SAFE_INTEGER }) {
+export function scanZcode({
+  database,
+  config,
+  minimumMtimeMs,
+  scannedAtMs,
+  deadlineMs = Number.MAX_SAFE_INTEGER,
+  maximumRows = config.limits.maxLinesPerRun
+}) {
   const health = emptyHealth(scannedAtMs);
   let stat;
   try {
@@ -165,7 +172,7 @@ export function scanZcode({ database, config, minimumMtimeMs, scannedAtMs, deadl
     const sourceFingerprint = hashIdentifier("zcode-source-identity", `${stat.dev}:${stat.ino}`);
     const toolBounds = checkpointBounds(database, "tool_usage", sourceFingerprint, minimumMtimeMs);
     const usageBounds = checkpointBounds(database, "model_usage", sourceFingerprint, minimumMtimeMs);
-    const { toolLimit, usageLimit } = streamAllowances(config.limits.maxLinesPerRun);
+    const { toolLimit, usageLimit } = streamAllowances(maximumRows);
     const toolAllocation = splitNewAndRefresh(toolLimit, toolBounds.exists);
     const usageAllocation = splitNewAndRefresh(usageLimit, usageBounds.exists);
     const sessionStartColumn = (table) => hasSessionStart

@@ -65,7 +65,11 @@ five minutes. Each run:
 7. writes bounded metadata-only status and 30-day report snapshots;
 8. records independent provider/source health and exits.
 
-No process listens for connections or remains resident between scans.
+The configured total byte and row/line budgets are apportioned across every
+enabled source family, including ZCode and Direct Runtime. A failed source
+consumes its allocation conservatively so later sources cannot turn parser or
+schema failures into an unbounded scan. No process listens for connections or
+remains resident between scans.
 
 ## Deterministic core
 
@@ -223,6 +227,8 @@ are counted without retaining their contents.
 
 Production defaults are owner-local and require no setup. Tests and explicit
 human invocations may override roots through `ATO_*` environment variables.
+Provider-source overrides must be absolute and unambiguous; unknown disabled
+provider names fail closed instead of silently leaving collection enabled.
 Overrides change only what this observer reads; they never grant write access
 to a provider source.
 

@@ -127,6 +127,70 @@ test("Direct Runtime observation drift fails closed before cursor advancement", 
   }
 });
 
+test("one collection shares its total byte and line budgets across every source family", () => {
+  const root = temporaryRoot();
+  try {
+    const firstDirect = path.join(root, "direct-one.jsonl");
+    const secondDirect = path.join(root, "direct-two.jsonl");
+    const { config, paths } = fixtureConfig(root, {
+      ATO_DIRECT_RUNTIME_LOGS: [firstDirect, secondDirect].join(path.delimiter),
+      ATO_MAX_RUN_BYTES: "4096",
+      ATO_MAX_LINES: "4"
+    });
+    writeJsonl(path.join(paths.codex, "budget.jsonl"), [
+      { timestamp: "2026-04-25T00:00:00.000Z", type: "session_meta", payload: { id: "budget-codex" } },
+      ...Array.from({ length: 12 }, (_, index) => ({
+        timestamp: "2026-04-25T00:00:01.000Z",
+        type: "response_item",
+        payload: { type: "custom_tool_call", call_id: `c${index}`, name: "exec", status: "completed", input: "x".repeat(300) }
+      }))
+    ]);
+    writeJsonl(path.join(paths.claude, "budget.jsonl"), Array.from({ length: 12 }, (_, index) => ({
+      timestamp: "2026-04-25T00:00:00.000Z",
+      type: "assistant",
+      sessionId: "budget-claude",
+      uuid: `u${index}`,
+      message: { id: `m${index}`, usage: { input_tokens: 1, output_tokens: 1 }, content: [] }
+    })));
+    writeJsonl(firstDirect, [directObservation({ eventId: digest("1") }), directObservation({ eventId: digest("2") })]);
+    writeJsonl(secondDirect, [directObservation({ eventId: digest("3") }), directObservation({ eventId: digest("4") })]);
+
+    const database = openStateDatabase(config);
+    const result = collect(database, config, Date.parse("2026-04-25T01:00:00.000Z"));
+    const sources = [...result.providers, ...result.semanticSources];
+    assert.equal(sources.reduce((sum, source) => sum + source.bytesRead, 0) <= config.limits.maxBytesPerRun, true);
+    assert.equal(sources.reduce((sum, source) => sum + source.linesRead, 0) <= config.limits.maxLinesPerRun, true);
+    assert.equal(sources.some((source) => source.backlogSources > 0), true);
+    database.close();
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a failed Direct Runtime source consumes its allocation before later files are considered", () => {
+  const root = temporaryRoot();
+  try {
+    const invalid = path.join(root, "direct-invalid.jsonl");
+    const later = path.join(root, "direct-later.jsonl");
+    const { config } = fixtureConfig(root, {
+      ATO_DISABLE_PROVIDERS: "codex,claude,zcode",
+      ATO_DIRECT_RUNTIME_LOGS: [invalid, later].join(path.delimiter),
+      ATO_MAX_RUN_BYTES: "4096",
+      ATO_MAX_LINES: "4"
+    });
+    writeJsonl(invalid, [{ ...directObservation(), unknown: true }]);
+    writeJsonl(later, [directObservation({ eventId: digest("6") })]);
+    const database = openStateDatabase(config);
+    const result = collect(database, config, 1_777_000_000_100);
+    assert.equal(result.semanticSources[0].status, "error");
+    assert.equal(result.semanticSources[0].backlogSources, 1);
+    assert.equal(database.prepare("SELECT count(*) AS n FROM semantic_execution_event").get().n, 0);
+    database.close();
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("Context Surface analysis import stores only bounded measurements and provenance", () => {
   const root = temporaryRoot();
   try {

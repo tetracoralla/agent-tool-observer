@@ -116,6 +116,22 @@ test("state database refuses a symlink target", () => {
   }
 });
 
+test("turn-associated usage queries retain their provider and turn indexes", () => {
+  const root = temporaryRoot();
+  try {
+    const { config } = fixtureConfig(root);
+    const database = openStateDatabase(config);
+    const indexes = new Set(database.prepare(`
+      SELECT name FROM sqlite_master WHERE type = 'index'
+    `).all().map((row) => row.name));
+    assert.equal(indexes.has("tool_event_turn_idx"), true);
+    assert.equal(indexes.has("usage_event_turn_idx"), true);
+    database.close();
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("schema migration discards stale derived Codex projections and reopens their cursors", () => {
   const root = temporaryRoot();
   try {

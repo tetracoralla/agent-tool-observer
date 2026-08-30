@@ -31,9 +31,22 @@ function integerSetting(value, fallback, minimum, maximum, name) {
   return parsed;
 }
 
-function pathList(value, fallback) {
-  if (!value) return fallback;
-  return value.split(path.delimiter).map((item) => item.trim()).filter(Boolean).map((item) => path.resolve(item));
+const PROVIDERS = new Set(["codex", "claude", "zcode", "direct-runtime"]);
+
+function absolutePath(value, name) {
+  if (!path.isAbsolute(value)) {
+    throw new ObserverError("CONFIG_INVALID", `${name} must contain absolute paths`);
+  }
+  return path.resolve(value);
+}
+
+function pathList(value, fallback, name) {
+  if (value === undefined || value === "") return fallback;
+  const items = value.split(path.delimiter).map((item) => item.trim());
+  if (items.length === 0 || items.some((item) => item.length === 0)) {
+    throw new ObserverError("CONFIG_INVALID", `${name} must contain non-empty absolute paths`);
+  }
+  return items.map((item) => absolutePath(item, name));
 }
 
 export function resolveConfig(environment = process.env, homeDirectory = os.homedir()) {
@@ -57,12 +70,16 @@ export function resolveConfig(environment = process.env, homeDirectory = os.home
     maxWallTimeMs: integerSetting(environment.ATO_MAX_WALL_MS, DEFAULT_LIMITS.maxWallTimeMs, 1000, 30 * 60_000, "ATO_MAX_WALL_MS"),
     leaseMs: integerSetting(environment.ATO_LEASE_MS, DEFAULT_LIMITS.leaseMs, 10_000, 60 * 60_000, "ATO_LEASE_MS")
   };
-  const disabledProviders = new Set(
+  const disabledProviderNames =
     String(environment.ATO_DISABLE_PROVIDERS || "")
       .split(",")
       .map((item) => item.trim().toLowerCase())
-      .filter(Boolean)
-  );
+      .filter(Boolean);
+  const unknownProvider = disabledProviderNames.find((provider) => !PROVIDERS.has(provider));
+  if (unknownProvider !== undefined) {
+    throw new ObserverError("CONFIG_INVALID", `ATO_DISABLE_PROVIDERS contains unknown provider: ${unknownProvider}`);
+  }
+  const disabledProviders = new Set(disabledProviderNames);
   return Object.freeze({
     stateDir,
     databasePath: path.join(stateDir, "observer.sqlite3"),
@@ -70,13 +87,13 @@ export function resolveConfig(environment = process.env, homeDirectory = os.home
     codexRoots: pathList(environment.ATO_CODEX_ROOTS, [
       path.join(homeDirectory, ".codex", "sessions"),
       path.join(homeDirectory, ".codex", "archived_sessions")
-    ]),
+    ], "ATO_CODEX_ROOTS"),
     claudeRoots: pathList(environment.ATO_CLAUDE_ROOTS, [
       path.join(homeDirectory, ".claude", "projects")
-    ]),
-    zcodeDatabasePath: path.resolve(
-      environment.ATO_ZCODE_DB || path.join(homeDirectory, ".zcode", "cli", "db", "db.sqlite")
-    ),
+    ], "ATO_CLAUDE_ROOTS"),
+    zcodeDatabasePath: environment.ATO_ZCODE_DB
+      ? absolutePath(environment.ATO_ZCODE_DB, "ATO_ZCODE_DB")
+      : path.join(homeDirectory, ".zcode", "cli", "db", "db.sqlite"),
     directRuntimeLogs: pathList(environment.ATO_DIRECT_RUNTIME_LOGS, [
       path.join(
         homeDirectory,
@@ -86,7 +103,7 @@ export function resolveConfig(environment = process.env, homeDirectory = os.home
         "Direct Execution Runtime",
         "observations.jsonl"
       )
-    ]),
+    ], "ATO_DIRECT_RUNTIME_LOGS"),
     disabledProviders,
     limits
   });

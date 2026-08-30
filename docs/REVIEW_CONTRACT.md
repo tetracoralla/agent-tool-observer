@@ -39,7 +39,9 @@
 ## Bounds
 
 1. One run has limits for files, total bytes, bytes per source, lines, line
-   bytes, JSON depth, and wall time.
+   bytes, JSON depth, and wall time. Total byte and line/row allocations span
+   every enabled source family; a failed source conservatively consumes its
+   allocation before a later source is considered.
 2. A partial final JSONL line does not advance the cursor.
 3. An over-limit line is discarded through its newline without constructing an
    unbounded string and increments a skipped count.
@@ -57,6 +59,8 @@
 9. Retention is at least the report lookback. Maintenance deletes only expired
    event rows, preserves each source's latest Context Surface row and the
    current Agent Host deployment, checkpoints the WAL, and compacts SQLite.
+10. Shared-turn usage association remains indexed by provider, turn, and time;
+    report generation must not degrade into an unindexed event cross-product.
 
 ## Claims
 
@@ -115,6 +119,9 @@
 6. The LaunchAgent path must resolve inside the installed runtime digest, never
    the mutable development checkout. A source edit cannot change the loaded
    program until an explicit reinstall selects a new digest.
+7. Command-specific and duplicate CLI options fail before action. In
+   particular, `--dry-run` cannot be silently ignored by collect, ingestion,
+   uninstall, or purge.
 
 ## Required validation
 
@@ -124,6 +131,9 @@
 - malformed, huge-line, truncation, replacement, and symlink cases;
 - source-byte conservation;
 - schema/privacy and network-import contract checks;
+- command-specific option, duplicate-option, configuration spelling, and
+  cross-provider total-budget regressions;
+- current-size report-query baseline plus shared-turn index presence;
 - CLI smoke with fixture providers;
 - Direct Runtime success, provider error, host error, sink failure, schema
   drift, projected-operation identity, schema migration, privacy, payload-byte,
