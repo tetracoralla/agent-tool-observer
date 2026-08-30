@@ -72,6 +72,8 @@ export function scanJsonlProvider(options) {
     });
     let maximumBytes = Math.min(options.limits.maxBytesPerSource, options.budget.remainingBytes);
     let maximumLines = Math.min(options.limits.maxLinesPerRun, options.budget.remainingLines);
+    const allocatedBytes = maximumBytes;
+    const allocatedLines = maximumLines;
     try {
       options.database.exec("BEGIN IMMEDIATE");
       let primeResult = null;
@@ -133,6 +135,8 @@ export function scanJsonlProvider(options) {
       options.budget.remainingLines -= totalLinesRead;
     } catch (error) {
       if (options.database.isTransaction) options.database.exec("ROLLBACK");
+      options.budget.remainingBytes = Math.max(0, options.budget.remainingBytes - allocatedBytes);
+      options.budget.remainingLines = Math.max(0, options.budget.remainingLines - allocatedLines);
       sourceFailures += 1;
       health.errorCode ??= stableErrorCode(error);
     }

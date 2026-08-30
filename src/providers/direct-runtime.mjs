@@ -182,12 +182,18 @@ function emptyHealth(scannedAtMs) {
   };
 }
 
-export function scanDirectRuntime({ database, config, scannedAtMs, deadlineMs }) {
+export function scanDirectRuntime({ database, config, scannedAtMs, deadlineMs, budget }) {
   const health = emptyHealth(scannedAtMs);
   let present = 0;
-  for (const filePath of config.directRuntimeLogs.slice(0, config.limits.maxFilesPerProvider)) {
+  const selectedLogs = config.directRuntimeLogs.slice(0, config.limits.maxFilesPerProvider);
+  if (selectedLogs.length < config.directRuntimeLogs.length) {
+    health.status = "partial";
+    health.errorCode = "SOURCE_FILE_LIMIT_REACHED";
+    health.backlogSources += config.directRuntimeLogs.length - selectedLogs.length;
+  }
+  for (const filePath of selectedLogs) {
     if (Date.now() >= deadlineMs) {
-      health.status = "partial";
+      if (health.status !== "error") health.status = "partial";
       health.errorCode = "RUN_DEADLINE_REACHED";
       health.backlogSources += 1;
       break;
@@ -209,6 +215,12 @@ export function scanDirectRuntime({ database, config, scannedAtMs, deadlineMs })
       health.errorCode = "SOURCE_FILE_INVALID";
       continue;
     }
+    if (budget.remainingBytes <= 0 || budget.remainingLines <= 0) {
+      if (health.status !== "error") health.status = "partial";
+      health.errorCode ??= "RUN_BUDGET_REACHED";
+      health.backlogSources += 1;
+      continue;
+    }
     const sourceId = hashIdentifier("source:direct-runtime", filePath);
     const cursor = getDirectRuntimeCursor(database, sourceId);
     const identity = `${info.dev}:${info.ino}`;
@@ -217,6 +229,8 @@ export function scanDirectRuntime({ database, config, scannedAtMs, deadlineMs })
     const discardingLine = identityMatches && cursor.discarding_line === 1;
     if (startOffset === info.size && !discardingLine) continue;
     let writes = 0;
+    const allocatedBytes = Math.min(config.limits.maxBytesPerSource, budget.remainingBytes);
+    const allocatedLines = Math.min(config.limits.maxLinesPerRun, budget.remainingLines);
     try {
       database.exec("BEGIN IMMEDIATE");
       const result = readJsonlIncremental({
@@ -224,9 +238,9 @@ export function scanDirectRuntime({ database, config, scannedAtMs, deadlineMs })
         startOffset,
         discardingLine,
         expectedIdentity: identityMatches ? identity : null,
-        maximumBytes: config.limits.maxBytesPerSource,
+        maximumBytes: allocatedBytes,
         maximumLineBytes: Math.min(config.limits.maxLineBytes, 1024 * 1024),
-        maximumLines: config.limits.maxLinesPerRun,
+        maximumLines: allocatedLines,
         maximumDepth: config.limits.maxJsonDepth,
         deadlineMs,
         onRecord(record) {
@@ -252,17 +266,23 @@ export function scanDirectRuntime({ database, config, scannedAtMs, deadlineMs })
       health.linesRead += result.linesRead;
       health.eventsWritten += writes;
       health.skippedLines += result.skippedLines;
+      budget.remainingBytes -= result.bytesRead;
+      budget.remainingLines -= result.linesRead;
       if (result.hasBacklog) {
         health.status = "partial";
         health.backlogSources += 1;
       }
     } catch (error) {
       if (database.isTransaction) database.exec("ROLLBACK");
+      budget.remainingBytes = Math.max(0, budget.remainingBytes - allocatedBytes);
+      budget.remainingLines = Math.max(0, budget.remainingLines - allocatedLines);
       health.status = health.filesRead > 0 ? "partial" : "error";
       health.errorCode = stableErrorCode(error, "DIRECT_OBSERVATION_READ_FAILED");
     }
   }
-  if (present === 0) return { ...health, status: "missing", errorCode: "DIRECT_OBSERVATION_LOG_MISSING" };
+  if (present === 0 && health.errorCode !== "SOURCE_FILE_LIMIT_REACHED") {
+    return { ...health, status: "missing", errorCode: "DIRECT_OBSERVATION_LOG_MISSING" };
+  }
   if (health.skippedLines > 0 && health.status === "ok") health.status = "partial";
   return health;
 }

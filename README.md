@@ -55,6 +55,9 @@ node --no-warnings src/cli.mjs install --dry-run
 node --no-warnings src/cli.mjs install
 ```
 
+`--dry-run` is accepted only by `maintain` and `install`; command-specific or
+duplicate options fail before any action instead of being silently ignored.
+
 Disabling or uninstalling the LaunchAgent preserves the database. To remove
 that shared local history as a separate destructive action:
 
@@ -97,6 +100,10 @@ latest Context Surface measurement per source and the current Agent Host
 deployment observation, checkpoints the write-ahead log, and compacts SQLite.
 `ATO_RETENTION_DAYS` may raise the bound but cannot be lower than
 `ATO_LOOKBACK_DAYS`.
+
+Explicit provider roots, the ZCode database, and Direct Runtime log overrides
+must be absolute paths. `ATO_DISABLE_PROVIDERS` accepts only `codex`, `claude`,
+`zcode`, and `direct-runtime`; misspellings fail closed.
 
 ## Supported sources
 

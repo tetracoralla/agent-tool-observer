@@ -1,89 +1,82 @@
 # Current status
 
-Verified on 2026-08-28 on the owner Mac.
+Verified on 2026-08-30 on the owner Mac.
 
 ## Development regression: PASS
 
 - `npm run check`: PASS;
-- 54 Node tests cover all three Agent-shell adapters, Direct Runtime metadata,
-  Context Surface import, idempotency, active-lease
-  exclusion, partial lines, malformed/deep/oversized records, truncation,
-  symlink rejection, privacy projection, conservative report claims,
-  code-text false-positive exclusion, schema migration and taxonomy repair,
-  provider-schema drift, bounded ZCode pagination and timestamp ties,
-  fail-closed Codex context recovery, cross-provider session-start correlation,
-  bounded routing truncation, semantic deployment refresh deduplication,
-  LaunchAgent rendering, content-addressed runtime installation, owner-only log
-  targets, payload-size projection, shared-turn token association, and the
-  wrapper/derived Procedure-candidate negative case;
-- production-source contract check confirms no networking modules, dynamic
-  evaluation, or third-party runtime dependencies;
+- 60 Node tests cover the Codex, Claude, ZCode, and Direct Runtime adapters;
+  privacy projection; incremental cursors; malformed, oversized, partial,
+  replaced, and symlinked sources; conservative reports; schema migration;
+  installed-runtime rendering; content-addressed installation; and retention;
+- command-specific and duplicate CLI options now fail before action, so an
+  ignored `--dry-run` cannot uninstall or purge data;
+- provider-source overrides require absolute paths and misspelled disabled
+  provider names fail closed;
+- one run's byte and line/row allocations now span every enabled source family,
+  including failed sources, ZCode, and Direct Runtime;
+- production-source checks confirm no networking modules, dynamic evaluation,
+  or third-party runtime dependencies;
 - fixture CLI smoke completes collection, status, report, and privacy checks.
 
-## Installed automatic runtime: PASS
+## Installed automatic runtime: PASS for current public 0.1.1; repaired source pending suite update
 
 - LaunchAgent label: `com.openadam.agent-tool-observer`;
-- schedule: run at login and every 300 seconds;
-- execution: one short-lived `collect` process, no `KeepAlive`;
-- current loaded program resolves through the stable Homebrew Node 22 path and
-  the fixed content-addressed Observer runtime
-  `0.1.0-692bd44a5d346185fa6ab7cfb65eafc3a37b2c1b827324bf81fbe8f7aee89021`;
-- idempotent reinstall: PASS;
-- the LaunchAgent no longer references the mutable development checkout;
-- RunAtLoad and a subsequent fixed-runtime collection completed with exit code
-  0; the loaded service is short-lived and currently not running between its
-  five-minute intervals;
-- owner-only SQLite, status snapshot, report snapshot, and log files were
-  created under the declared Application Support directory;
-- status/report snapshots are readable without opening the live WAL database.
+- schedule: run at login and every 300 seconds as one short-lived collector,
+  with no `KeepAlive`;
+- current loaded program is the owner-only content-addressed Observer 0.1.1
+  runtime `7b3239591cfc264bb2438864deb6b2d7b84dd59e5a253a575f34ec12eb48fcd8`,
+  using the Agent Host Suite's fixed Node 22.22.1 runtime;
+- the latest observed automatic run completed in about 1.24 seconds with Codex,
+  Claude, ZCode, and Direct Runtime all `ok`, no backlog, and exit code 0;
+- the 93,442,048-byte SQLite database, status/report snapshots, plist, and logs
+  are owner-only; the service is not resident between scans;
+- the repaired source has a different content digest and has intentionally not
+  replaced the installed runtime before the enclosing Agent Host Suite release
+  is reviewed and activated.
 
-## Provider coverage
+## Provider and Host coverage
 
-- Claude Code: PASS, current 30-day JSONL source is caught up;
-- ZCode: PASS, current `tool_usage` and `model_usage` tables read successfully
-  under bounded pagination;
-  a settled source now produces zero repeated event writes while terminal-state
-  transitions remain refreshable;
-- Codex: PASS, current source is caught up with no backlog or skipped lines;
-- fresh-session basis is explicit per provider: Codex session metadata, the
-  earliest observed Claude session record, and ZCode `session.time_created`
-  when that source table exists. Unknown starts remain separate rather than
-  becoming zero or fresh;
-- Direct Runtime metadata: PASS, one owner-only exact JSONL source is caught up;
-  715 actual local-pilot calls are stored as semantic execution metadata across
-  Math Anchor, Migratory Time, Dependency Preflight, and Structured Data
-  Preflight targets;
-- Context Surface import: PASS, one explicit current local plugin-subset
-  measurement records 42 tools, 70 schemas, 256,417 canonical catalog bytes,
-  and zero claimed token measurements. It does not claim complete Codex catalog
-  coverage or current installed binding.
+- the current database contains 145,547 tool events, 13,596 usage events, and
+  1,023 Direct Runtime semantic execution events;
+- the current Agent Host deployment observation is
+  `local-dogfood-20260830.28` / suite `0.1.1-dogfood.28`;
+- the installed Host snapshot reports all four Observer sources `ok` and keeps
+  historical calls separate from current-release adoption or task quality;
+- the current installed Agent catalog is 64,804 canonical UTF-8 bytes across
+  nine Agent-visible tools, within the declared 65,536-byte limit, with no hard
+  name collisions;
+- provider session-start coverage and fresh-session adoption remain explicitly
+  unobserved for this release rather than being inferred from historical calls.
+
+## Performance and resource baseline
+
+- default 30-day status/report reads use the owner-only snapshots;
+- on a read-only copy of the current 93 MB database, the custom 29-day report's
+  shared-turn association query took about 5.76 seconds before the new indexes;
+  with the repaired provider/turn/time indexes it took 38–47 ms, and the full
+  report took about 287 ms;
+- creating those additive indexes on the copied current-size database took
+  about 262 ms. There is no product SLO, so these are current baselines rather
+  than a universal performance guarantee.
 
 ## Privacy and side effects: PASS
 
-- zero network calls and zero model calls;
+- zero Observer network calls and zero model calls;
 - no prompts, messages, reasoning, source paths, project paths, commands, tool
-  arguments/results, or provider error text in the observer schema;
-- provider source bytes remained unchanged in integration tests;
-- the observer and LaunchAgent write allowlist contains only their state,
-  snapshot, log, and plist targets; no tool-repository write path exists;
-- installer and snapshot failures report committed side effects explicitly.
-
-The v0.4 report marks dynamic payload-byte coverage and shared-turn token
-association as partial, rather than treating missing rows as zero. Existing
-history predates payload-byte collection; current Codex coverage begins with
-newly observed `exec` envelopes. Direct Runtime events provide per-semantic-call
-request/result sizes and zero-model timing. Monetary cost remains unavailable
-because compatible model and pricing identity are not observed per tool call.
+  arguments/results, or provider error text in the persisted schema;
+- provider sources are read-only and source-byte conservation is covered by
+  integration tests;
+- installer and snapshot failures report committed Observer-side effects
+  explicitly.
 
 ## Claim boundary
 
 The current report supports observed-use and runtime-error signals. Its
-fresh-session and bounded-routing fields are deterministic correlations, not
-an adoption, opportunity, causation, correctness, or task-quality assessment.
-Those judgments remain outside Observer and require current task context in an
-external Agent or reviewer.
+fresh-session and bounded-routing fields are deterministic correlations, not an
+adoption, opportunity, causation, correctness, or task-quality assessment.
 
 ## Business/experience acceptance
 
-Pending owner use over ordinary work. No publication or external-user rollout
-has been authorized.
+Pending owner use after the repaired Observer is delivered through the reviewed
+Agent Host Suite update. No external telemetry service is part of this product.

@@ -83,12 +83,30 @@ export function collect(database, config, nowMs = Date.now()) {
   const runId = startCollectionRun(database, nowMs);
   const minimumMtimeMs = nowMs - config.limits.lookbackDays * 24 * 60 * 60 * 1000;
   const deadlineMs = wallStartedAtMs + config.limits.maxWallTimeMs;
-  const jsonBudget = () => ({
-    remainingBytes: Math.floor(config.limits.maxBytesPerRun / 2),
-    remainingLines: Math.floor(config.limits.maxLinesPerRun / 2),
+  const allocate = (total, providers) => new Map(providers.map((provider, index) => [
+    provider,
+    Math.floor(total / providers.length) + (index < total % providers.length ? 1 : 0)
+  ]));
+  const enabled = (provider) => !config.disabledProviders.has(provider);
+  const byteAllocations = allocate(
+    config.limits.maxBytesPerRun,
+    ["codex", "claude", "direct-runtime"].filter(enabled)
+  );
+  const lineAllocations = allocate(
+    config.limits.maxLinesPerRun,
+    ["codex", "claude", "zcode", "direct-runtime"].filter(enabled)
+  );
+  const budgetFor = (provider) => ({
+    remainingBytes: byteAllocations.get(provider) ?? 0,
+    remainingLines: lineAllocations.get(provider) ?? 0,
     deadlineMs
   });
-  const budgets = { codex: jsonBudget(), claude: jsonBudget() };
+  const budgets = {
+    codex: budgetFor("codex"),
+    claude: budgetFor("claude"),
+    zcode: budgetFor("zcode"),
+    directRuntime: budgetFor("direct-runtime")
+  };
   const health = [];
   const scanners = {
     codex: () => scanCodex({ database, config, minimumMtimeMs, scannedAtMs: nowMs, budget: budgets.codex }),
@@ -97,7 +115,14 @@ export function collect(database, config, nowMs = Date.now()) {
       if (Date.now() >= deadlineMs) {
         return { ...disabledHealth("zcode", nowMs), status: "partial", errorCode: "RUN_DEADLINE_REACHED", backlogSources: 1 };
       }
-      return scanZcode({ database, config, minimumMtimeMs, scannedAtMs: nowMs, deadlineMs });
+      return scanZcode({
+        database,
+        config,
+        minimumMtimeMs,
+        scannedAtMs: nowMs,
+        deadlineMs,
+        maximumRows: budgets.zcode.remainingLines
+      });
     }
   };
   try {
@@ -123,7 +148,13 @@ export function collect(database, config, nowMs = Date.now()) {
       };
     } else {
       try {
-        directRuntimeHealth = scanDirectRuntime({ database, config, scannedAtMs: nowMs, deadlineMs });
+        directRuntimeHealth = scanDirectRuntime({
+          database,
+          config,
+          scannedAtMs: nowMs,
+          deadlineMs,
+          budget: budgets.directRuntime
+        });
       } catch (error) {
         directRuntimeHealth = {
           ...failedHealth("direct-runtime", nowMs, error),
