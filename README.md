@@ -28,17 +28,6 @@ declared Agent-visible tool bindings, and the exact imported catalog digest.
 That lets reports correlate passive calls with the release that declared the
 binding without storing task content, commands, or filesystem paths.
 
-Procedure implementations may also hand an explicit metadata-only
-`openadam.procedure-receipt.v0.1` or `v0.2` JSON, JSONL, or array file to the
-observer. These receipt formats are **legacy**: the portable receipt and
-human-checkpoint semantics were removed from the Procedure standard on
-2026-08-23, and this ingestion path exists only to read records that were
-already produced under the old formats. The observer validates the file,
-hashes invocation identity, and stores only semantic execution metadata—not
-asset content or provider results. v0.2 human-checkpoint stages are structurally
-checked and then discarded; no checkpoint, approval, or reviewer state is
-persisted or reported.
-
 ## Commands
 
 ```sh
@@ -46,7 +35,6 @@ node --no-warnings src/cli.mjs collect
 node --no-warnings src/cli.mjs status
 node --no-warnings src/cli.mjs report --days 30
 node --no-warnings src/cli.mjs report --days 30 --openadam --json
-node --no-warnings src/cli.mjs ingest-receipts --file /path/to/receipts.json --json
 node --no-warnings src/cli.mjs ingest-context-surface --file /path/to/analysis.json --json
 node --no-warnings src/cli.mjs ingest-agent-host-deployment --file /path/to/deployment.json --json
 node --no-warnings src/cli.mjs maintain --dry-run --json
@@ -91,8 +79,10 @@ binary. The installer then binds the LaunchAgent to that exact executable and
 fails closed instead of falling back to another machine installation.
 
 The current report schema is
-`openadam.agent-tool-observer.report.v0.4`. Older report snapshots are rebuilt
-from the current database before they are returned.
+`openadam.agent-tool-observer.report.v0.5`. Older report snapshots are rebuilt
+from the current database before they are returned. v0.5 reports semantic
+execution only from the current Direct Runtime metadata boundary; retired
+pre-release Procedure receipts are not accepted or projected.
 
 The default reporting window is 30 days and the default retained event window
 is 45 days. `maintain` removes only rows older than that bound, preserves the
@@ -114,7 +104,6 @@ must be absolute paths. `ATO_DISABLE_PROVIDERS` accepts only `codex`, `claude`,
 - the exact Direct Runtime metadata log named by `ATO_DIRECT_RUNTIME_LOGS`
   (or the standalone default path) when that runtime is launched with the
   matching `--observation-log` option;
-- explicit Procedure Receipt files supplied to `ingest-receipts`.
 - explicit Context Surface analysis files supplied to
   `ingest-context-surface`.
 - explicit Agent Host deployment observations supplied to
@@ -138,12 +127,9 @@ not assigned to individual tools. Serialized payload byte counts are
 measurements only; their content is never stored. Monetary cost remains
 explicitly unavailable until model and pricing identity are observed at a
 compatible granularity.
-Ingested legacy receipts add declared Procedure/Capability execution and
-binding identity; their human-checkpoint fields are discarded on read. A
-declared MCP binding may map passive call counts to that Capability, but
-correctness remains unknown. A legacy checkpoint's `source: human` was never
-identity authentication and never proved the decision was professionally
-correct. Repeated unmapped MCP use and repeated
+Direct Runtime metadata may add versioned Procedure, Capability, or projected
+MCP execution identity, but correctness remains unknown. Repeated unmapped MCP
+use and repeated
 same-turn tool sequences may nominate a Capability-contract or Procedure
 evaluation.
 It cannot prove task correctness, that an unused tool had an opportunity, that

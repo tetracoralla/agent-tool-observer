@@ -18,7 +18,6 @@ Codex persisted events  --- read-only adapter --\
 Claude persisted events --- read-only adapter ---- local projection -> report
 ZCode usage database    --- read-only adapter --/
 Direct Runtime JSONL    --- exact-file adapter --/
-Procedure receipt file  --- explicit validator -- local projection -> report
 Context analysis result --- explicit validator -/
                                                     |
                                                     +-> targeted candidate only
@@ -39,13 +38,12 @@ The observer never:
 - treats completion as correctness;
 - automatically weakens routing or retires a tool.
 
-Semantic input has three distinct paths. Legacy Procedure-receipt import validates
-and projects a bounded file supplied by the owner or an in-scope implementation.
-Direct Runtime collection reads only its exact optional metadata log and accepts
-only the closed `openadam.direct-execution-observation.v0.1` event shape. Static
-Context Surface measurement is an explicit import of an Analyzer result. None
-of these paths scans arbitrary output directories or discovers installed tool
-catalogs.
+Semantic input has three distinct paths. Direct Runtime collection reads only
+its exact optional metadata log and accepts only the closed
+`openadam.direct-execution-observation.v0.1` event shape. Static Context Surface
+measurement and Agent Host deployment observation are explicit bounded imports.
+None of these paths scans arbitrary output directories or discovers installed
+tool catalogs. Retired pre-release Procedure receipts are not accepted.
 
 ## Automatic flow
 
@@ -112,13 +110,6 @@ identifiers are never stored in checkpoint form. The adapter treats the usage
 tables as append-only event stores; terminal-state changes are read from their
 completion timestamps.
 
-Procedure observations retain hashed invocation identity, versioned Procedure
-and implementation IDs, runtime outcome and timing, and stable error code.
-Capability-stage observations retain versioned Capability, operation, and
-provider IDs; binding transport and target; runtime status, duration, effects,
-and stable error code. Receipt input/output digests are validated but not
-stored.
-
 Direct Runtime observations retain only hashed work-order/call identity,
 versioned semantic target and provider identity, binding/contract digests,
 terminal status and stable error code, timing, cold/warm session state, and
@@ -164,26 +155,15 @@ returned record count is not labeled as total turns. These records do not
 retain prompts, commands, arguments, results, or a judgment of whether the task
 should have used the tool.
 
-Legacy v0.2 receipts may still contain human-checkpoint stages. The portable
-approval semantics behind them were removed from the Procedure standard on
-2026-08-23, so the observer checks only the entry shape and discards it on
-read. No checkpoint, approval, authority, decision-source, reviewer identity,
-criteria, or evidence field is stored, aggregated, or reported, and the
-observer never turns a recorded human decision into a correctness claim.
-
-When a receipt declares an MCP binding target, the report may map matching
-passive MCP names to that Capability and count `passiveObservedCalls`. The
-mapping basis is recorded as `declared-receipt-binding-target`; it is usage
-observation only and does not turn passive completion into conformance or
-correctness.
-
 ## Report semantics
 
 The current JSON report is
-`openadam.agent-tool-observer.report.v0.4`. A snapshot without that exact
-version is stale input and is rebuilt from the current database. v0.4 uses
+`openadam.agent-tool-observer.report.v0.5`. A snapshot without that exact
+version is stale input and is rebuilt from the current database. v0.5 uses
 `correctnessStatus` and `opportunityStatus`; both remain `unknown` unless a
-separate current assessment owns the judgment.
+separate current assessment owns the judgment. It removes the legacy
+receipt-derived `procedures` and `capabilities` projections; current semantic
+execution observations come only from Direct Runtime metadata.
 
 The report emits these signals:
 

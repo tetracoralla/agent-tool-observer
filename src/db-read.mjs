@@ -107,53 +107,6 @@ export function usageReportRows(database, cutoffMs) {
   `).all(cutoffMs);
 }
 
-export function procedureReportRows(database, cutoffMs) {
-  return database.prepare(`
-    SELECT
-      procedure_id,
-      procedure_version,
-      implementation_id,
-      implementation_version,
-      count(*) AS runs,
-      sum(CASE WHEN receipt_outcome = 'success' THEN 1 ELSE 0 END) AS completed,
-      sum(CASE WHEN receipt_outcome = 'error' THEN 1 ELSE 0 END) AS errors,
-      sum(CASE WHEN receipt_outcome = 'blocked' THEN 1 ELSE 0 END) AS blocked,
-      sum(CASE WHEN receipt_outcome = 'rejected' THEN 1 ELSE 0 END) AS rejected,
-      avg(duration_ms) AS average_duration_ms,
-      min(completed_at_ms) AS first_observed_at_ms,
-      max(completed_at_ms) AS last_observed_at_ms
-    FROM procedure_event
-    WHERE completed_at_ms >= ?
-    GROUP BY procedure_id, procedure_version, implementation_id, implementation_version
-    ORDER BY runs DESC, procedure_id ASC
-  `).all(cutoffMs);
-}
-
-export function capabilityReportRows(database, cutoffMs) {
-  return database.prepare(`
-    SELECT
-      capability_id,
-      capability_version,
-      operation_id,
-      provider_id,
-      provider_version,
-      transport,
-      target,
-      count(*) AS executions,
-      sum(CASE WHEN status = 'success' THEN 1 ELSE 0 END) AS completed,
-      sum(CASE WHEN status = 'error' THEN 1 ELSE 0 END) AS errors,
-      sum(CASE WHEN status = 'skipped' THEN 1 ELSE 0 END) AS skipped,
-      avg(CASE WHEN status != 'skipped' THEN duration_ms END) AS average_duration_ms,
-      min(completed_at_ms) AS first_observed_at_ms,
-      max(completed_at_ms) AS last_observed_at_ms
-    FROM capability_event
-    WHERE completed_at_ms >= ?
-    GROUP BY capability_id, capability_version, operation_id, provider_id,
-      provider_version, transport, target
-    ORDER BY executions DESC, capability_id ASC, operation_id ASC
-  `).all(cutoffMs);
-}
-
 export function semanticExecutionReportRows(database, cutoffMs) {
   return database.prepare(`
     SELECT
@@ -245,10 +198,13 @@ export function toolSequenceEvents(database, cutoffMs, openAdamOnly = false) {
   `).all(cutoffMs, openAdamOnly ? 1 : 0);
 }
 
-export function semanticTargets(database) {
+export function observedSemanticToolNames(database) {
   return database.prepare(`
-    SELECT DISTINCT target FROM capability_event ORDER BY target
-  `).all().map((row) => row.target);
+    SELECT DISTINCT tool_name
+    FROM semantic_execution_event
+    WHERE target_kind IN ('mcp-tool', 'mcp-operation') AND tool_name IS NOT NULL
+    ORDER BY tool_name
+  `).all().map((row) => row.tool_name);
 }
 
 export function schemaColumns(database) {

@@ -20,3 +20,9 @@ test("CLI rejects duplicate options instead of silently changing intent", () => 
     code: "ARGUMENT_INVALID"
   });
 });
+
+test("CLI does not expose the retired Procedure receipt importer", () => {
+  assert.throws(() => parseArguments(["ingest-receipts", "--file", "/tmp/legacy.json"]), {
+    code: "ARGUMENT_INVALID"
+  });
+});
