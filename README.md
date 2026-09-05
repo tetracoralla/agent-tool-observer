@@ -1,5 +1,10 @@
 # Agent Tool Observer
 
+> **Current source:** [agent-tool-observer in Agent Host](https://github.com/tetracoralla/agent-host-suite/tree/main/packages/agent-tool-observer).
+> Development, installation, and current integration documentation now belong to
+> Agent Host. This repository retains the earlier standalone source; the
+> instructions below describe that historical version.
+
 Agent Tool Observer is a private, local-only observer for the Agent clients on
 this Mac. It incrementally reads the structured records already written by
 Codex, Claude Code, and ZCode, projects only bounded usage metadata into its own
