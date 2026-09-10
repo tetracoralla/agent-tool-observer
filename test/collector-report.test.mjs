@@ -44,8 +44,18 @@ test("repeat collection is idempotent and cannot infer retirement", () => {
     const report = buildReport(database, { days: 30 }, now + 1000);
     assert.equal(report.schemaVersion, REPORT_SCHEMA_VERSION);
     assert.equal(isCurrentReport(report), true);
-    assert.deepEqual(report.portfolio.retireCandidates, []);
-    assert.deepEqual(report.portfolio.weakenRoutingCandidates, []);
+    assert.deepEqual(report.portfolio.highObservedErrorRates, []);
+    assert.deepEqual(report.portfolio.repeatedUnmappedMcpUse, []);
+    assert.deepEqual(report.portfolio.repeatedToolSequences, []);
+    for (const retiredField of [
+      "fixCandidates",
+      "capabilityCandidates",
+      "procedureCandidates",
+      "weakenRoutingCandidates",
+      "retireCandidates",
+    ]) {
+      assert.equal(Object.hasOwn(report.portfolio, retiredField), false);
+    }
     assert.equal(report.tools.every((tool) => tool.correctnessStatus === "unknown"), true);
     assert.equal(report.tools.every((tool) => tool.opportunityStatus === "unknown"), true);
     const retiredClaimFields = ["correctness" + "Evidence", "opportunity" + "Evidence"];
@@ -62,7 +72,7 @@ test("repeat collection is idempotent and cannot infer retirement", () => {
   }
 });
 
-test("runtime errors need enough measured calls before fix-candidate", () => {
+test("runtime errors need enough measured calls before a neutral high-error observation", () => {
   const root = temporaryRoot();
   try {
     const { config } = fixtureConfig(root);
@@ -79,7 +89,16 @@ test("runtime errors need enough measured calls before fix-candidate", () => {
     assert.equal(report.tools[0].signal, "insufficient-data");
     insert.run("e4", now, "completed", now);
     report = buildReport(database, { days: 1, openAdamOnly: true }, now);
-    assert.equal(report.tools[0].signal, "fix-candidate");
+    assert.equal(report.tools[0].signal, "high-observed-error-rate");
+    assert.deepEqual(report.portfolio.highObservedErrorRates, [{
+      provider: "claude",
+      toolName: "mcp__math_anchor__math_run",
+      measuredCalls: 5,
+      errors: 4,
+      errorRate: 0.8,
+      basis: "minimum-measured-calls-and-observed-runtime-error-rate",
+      interpretationStatus: "not-performed",
+    }]);
     database.close();
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

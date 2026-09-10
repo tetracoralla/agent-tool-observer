@@ -32,7 +32,9 @@ Verified on 2026-08-31 on the owner Mac.
   Direct Runtime all `ok`, no backlog, and zero Observer network/model calls;
 - the SQLite database, status/report snapshots, plist, and logs remain
   owner-only; the service is not resident between scans;
-- report v0.5 is active. The retired pre-release receipt importer is absent,
+- report v0.6 is active. Action-bearing portfolio candidate fields are absent;
+  repeated patterns and high runtime error rates remain neutral observations.
+  The retired pre-release receipt importer is absent,
   legacy Procedure/Capability tables contain zero rows, and semantic execution
   reporting comes only from Direct Runtime metadata.
 

@@ -6,3 +6,6 @@ local-state/
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
+.v2c/
+.video_agent/
+.venv/

@@ -1,5 +1,10 @@
 # Agent Tool Observer
 
+> **Migration status:** active source ownership is moving to
+> `agent-host-suite/packages/agent-tool-observer`. This checkout preserves the
+> current report-v0.6 work as a recoverable migration source; do not start a
+> separate product or release line here.
+
 Agent Tool Observer is a private, local-only observer for the Agent clients on
 this Mac. It incrementally reads the structured records already written by
 Codex, Claude Code, and ZCode, projects only bounded usage metadata into its own
@@ -79,10 +84,13 @@ binary. The installer then binds the LaunchAgent to that exact executable and
 fails closed instead of falling back to another machine installation.
 
 The current report schema is
-`openadam.agent-tool-observer.report.v0.5`. Older report snapshots are rebuilt
-from the current database before they are returned. v0.5 reports semantic
+`openadam.agent-tool-observer.report.v0.6`. Older report snapshots are rebuilt
+from the current database before they are returned. v0.6 reports semantic
 execution only from the current Direct Runtime metadata boundary; retired
-pre-release Procedure receipts are not accepted or projected.
+pre-release Procedure receipts are not accepted or projected. Portfolio fields
+contain neutral repeated-use, repeated-sequence, and high observed error-rate
+measurements; they do not nominate repairs, Capabilities, Procedures, routing
+changes, or retirement.
 
 The default reporting window is 30 days and the default retained event window
 is 45 days. `maintain` removes only rows older than that bound, preserves the
@@ -129,14 +137,13 @@ explicitly unavailable until model and pricing identity are observed at a
 compatible granularity.
 Direct Runtime metadata may add versioned Procedure, Capability, or projected
 MCP execution identity, but correctness remains unknown. Repeated unmapped MCP
-use and repeated
-same-turn tool sequences may nominate a Capability-contract or Procedure
-evaluation.
+use and repeated same-turn tool sequences remain neutral pattern observations;
+they do not nominate a Capability, Procedure, evaluation, repair, or route
+change.
 It cannot prove task correctness, that an unused tool had an opportunity, that
-the Agent selected a tool naturally, that a nominated sequence is
-professionally correct, or that a tool should be retired. Those
-remain `insufficient-data` until a targeted controlled evaluation supplies the
-missing observations and comparison assessment.
+the Agent selected a tool naturally, that a repeated sequence is professionally
+correct, or that a tool should be changed or retired. A user or user-selected
+Agent owns any separate interpretation, evaluation choice, and action.
 
 An Agent Host deployment observation can establish that a passive tool name
 matches one declared binding in one named compatibility release. Codex, Claude,

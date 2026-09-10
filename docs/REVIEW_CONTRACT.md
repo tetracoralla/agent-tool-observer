@@ -61,12 +61,13 @@ Completing every item below cannot by itself end the review.
 1. Runtime completion is never labeled correctness, usefulness, verification,
    adoption, or user value. Missing status, latency, retry, usage, opportunity,
    availability, routing, token, and cost data remain unknown rather than zero.
-2. Zero calls never create `weaken-routing` or `retire-candidate`. A fix
-   candidate requires the declared minimum measured-call count and observed
-   runtime error rate, with those counts exposed.
-3. Passive unmapped MCP use or repeated tool sequences may nominate a targeted
-   Capability or Procedure evaluation only. The observer cannot run that
-   evaluation or promote the nomination into a standard.
+2. Zero calls never create routing, repair, or retirement semantics. A high
+   observed error-rate signal requires the declared minimum measured-call count
+   and observed runtime error rate, with those counts exposed; it remains a
+   measurement rather than a repair instruction.
+3. Passive unmapped MCP use and repeated tool sequences retain only neutral
+   repeated-pattern names. They cannot nominate a Capability, Procedure,
+   evaluation, repair, route change, or standard.
 4. Payload bytes are measurements, not content or cost. Turn token totals are
    shared associations, never allocated to one tool. Monetary cost remains
    unavailable without compatible model and pricing identity.
@@ -79,6 +80,10 @@ Completing every item below cannot by itself end the review.
    keeps pre-activation and unknown-start calls separate, and discloses source
    and returned-record bounds. Returned records are not total turns or causal
    attribution.
+7. Report schemas and renderings reject `fixCandidates`,
+   `capabilityCandidates`, `procedureCandidates`, `weakenRoutingCandidates`,
+   and `retireCandidates`. Interpretation and action remain owned by the user
+   or user-selected Agent.
 
 ## Automatic installation
 
@@ -115,6 +120,6 @@ Completing every item below cannot by itself end the review.
 - **Owner business acceptance:** whether the passive portfolio view changes a
   useful decision remains owner judgment, separate from the lanes above.
 
-Every PASS names the current command or flow and observable. End with
-`tools-dev workspace escalations`, including any Agent Host schema consumer,
+Every PASS names the current command or flow and observable. Report concrete
+cross-repository implications when found, including any Agent Host schema consumer,
 Capability/Procedure boundary, installed-runtime, or shared-resource concern.
