@@ -414,7 +414,7 @@ test("fresh-session routing reports bounded observation records instead of a fal
   }
 });
 
-test("orchestration wrappers and derived nested calls cannot nominate a Procedure", () => {
+test("orchestration wrappers and derived nested calls cannot create repeated tool-sequence observations", () => {
   const root = temporaryRoot();
   try {
     const { config } = fixtureConfig(root);
@@ -442,7 +442,84 @@ test("orchestration wrappers and derived nested calls cannot nominate a Procedur
       }
     }
     const report = buildReport(database, { days: 1 }, now + 1000);
-    assert.deepEqual(report.portfolio.procedureCandidates, []);
+    assert.deepEqual(report.portfolio.repeatedToolSequences, []);
+    database.close();
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("repeated passive patterns remain neutral observations without Capability or Procedure nominations", () => {
+  const root = temporaryRoot();
+  try {
+    const { config } = fixtureConfig(root);
+    const database = openStateDatabase(config);
+    const now = Date.now();
+    for (let index = 0; index < 5; index += 1) {
+      putToolEvent(database, {
+        eventId: `unmapped-${index}`,
+        provider: "codex",
+        sessionHash: `unmapped-session-${index % 2}`,
+        turnHash: `unmapped-turn-${index}`,
+        callHash: `unmapped-call-${index}`,
+        occurredAtMs: now + index,
+        toolName: "mcp__unmapped__transform",
+        routeClass: "mcp",
+        isOpenAdam: false,
+        derived: false,
+        status: "completed",
+        sourceFormat: "test",
+        recordedAtMs: now,
+      });
+    }
+    for (let turn = 0; turn < 3; turn += 1) {
+      for (const [position, toolName] of ["mcp__alpha__read", "mcp__beta__write"].entries()) {
+        putToolEvent(database, {
+          eventId: `sequence-${turn}-${position}`,
+          provider: "codex",
+          sessionHash: `sequence-session-${turn % 2}`,
+          turnHash: `sequence-turn-${turn}`,
+          callHash: `sequence-call-${turn}-${position}`,
+          occurredAtMs: now + 100 + turn * 10 + position,
+          toolName,
+          routeClass: "mcp",
+          isOpenAdam: false,
+          derived: false,
+          status: "completed",
+          sourceFormat: "test",
+          recordedAtMs: now,
+        });
+      }
+    }
+
+    const report = buildReport(database, { days: 1 }, now + 1000);
+    assert.deepEqual(report.portfolio.repeatedUnmappedMcpUse, [{
+      provider: "codex",
+      toolName: "mcp__unmapped__transform",
+      calls: 5,
+      signal: "repeated-unmapped-mcp-use",
+      basis: "repeated-unmapped-mcp-use",
+      correctnessStatus: "unknown",
+      interpretationStatus: "not-performed",
+    }]);
+    assert.deepEqual(report.portfolio.repeatedToolSequences, [{
+      provider: "codex",
+      sequence: ["mcp__alpha__read", "mcp__beta__write"],
+      observedTurns: 3,
+      observedSessions: 2,
+      signal: "repeated-tool-sequence",
+      correctnessStatus: "unknown",
+      interpretationStatus: "not-performed",
+    }]);
+    for (const actionField of [
+      "fixCandidates",
+      "capabilityCandidates",
+      "procedureCandidates",
+      "weakenRoutingCandidates",
+      "retireCandidates",
+    ]) {
+      assert.equal(Object.hasOwn(report.portfolio, actionField), false);
+    }
     database.close();
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

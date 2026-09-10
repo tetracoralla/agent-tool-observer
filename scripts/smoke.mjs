@@ -71,8 +71,10 @@ try {
   assert.equal(collection.modelCalls, 0);
   const report = run("report", "--days", "1", "--json");
   assert.equal(report.tools.length >= 4, true);
-  assert.deepEqual(report.portfolio.retireCandidates, []);
-  assert.equal(report.schemaVersion, "openadam.agent-tool-observer.report.v0.5");
+  assert.deepEqual(report.portfolio.highObservedErrorRates, []);
+  assert.deepEqual(report.portfolio.repeatedUnmappedMcpUse, []);
+  assert.deepEqual(report.portfolio.repeatedToolSequences, []);
+  assert.equal(report.schemaVersion, "openadam.agent-tool-observer.report.v0.6");
   assert.equal("procedures" in report, false);
   assert.equal("capabilities" in report, false);
   assert.equal(report.privacy.rawContentStored, false);

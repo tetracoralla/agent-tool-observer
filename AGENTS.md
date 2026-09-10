@@ -25,15 +25,22 @@ language.
   and must never copy raw provider metadata or error text.
 - Automatic collection is a macOS LaunchAgent that invokes a short-lived
   incremental scan. It is not a network service and must not remain resident.
-- Passive observations may identify use, reliability, latency, and cost
-  signals. They may not infer correctness, missed opportunities, natural
-  preference, redundancy, or retirement from absence or completion alone.
+- Passive observations may identify use, runtime errors, latency, payload, and
+  cost measurements. Their field names must remain neutral observations; they
+  may not encode repair, Capability, Procedure, routing, ranking, redundancy,
+  retirement, or other product-action candidates.
 - `agent-tool-evals` remains a separate bounded causal evaluator. This project
-  may recommend a targeted evaluation but must not run model-backed experiments
-  automatically.
+  neither recommends nor runs a targeted evaluation automatically. A user or
+  user-selected Agent may interpret current observations and separately choose
+  an evaluation.
 - Treat `observed`, `completed`, `error`, and `cancelled` as transport/runtime
   states, not semantic correctness. Missing measurements remain `null`, never
   zero.
+- The user or user-selected Agent owns semantic interpretation, productization,
+  route changes, standardization, repair priority, and retirement decisions.
+  The Observer owns collection safety, exact measurements, privacy, freshness,
+  and stable neutral report contracts; do not shift those mechanical duties
+  back to the user.
 - Use one deterministic core for CLI reports and automatic collection. Do not
   add an MCP/plugin surface until repeated use proves shell access is a routing
   cost.

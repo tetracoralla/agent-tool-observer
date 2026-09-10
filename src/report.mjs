@@ -13,7 +13,7 @@ import {
   usageReportRows
 } from "./db-read.mjs";
 
-export const REPORT_SCHEMA_VERSION = "openadam.agent-tool-observer.report.v0.5";
+export const REPORT_SCHEMA_VERSION = "openadam.agent-tool-observer.report.v0.6";
 const ROUTING_EVENT_LIMIT = 50_000;
 const ROUTING_OBSERVATION_LIMIT = 100;
 const SESSION_START_BASIS = Object.freeze({
@@ -25,6 +25,14 @@ const SESSION_START_BASIS = Object.freeze({
 export function isCurrentReport(value) {
   return value?.schemaVersion === REPORT_SCHEMA_VERSION
     && Array.isArray(value.tools)
+    && Array.isArray(value.portfolio?.highObservedErrorRates)
+    && Array.isArray(value.portfolio?.repeatedUnmappedMcpUse)
+    && Array.isArray(value.portfolio?.repeatedToolSequences)
+    && !("fixCandidates" in value.portfolio)
+    && !("capabilityCandidates" in value.portfolio)
+    && !("procedureCandidates" in value.portfolio)
+    && !("weakenRoutingCandidates" in value.portfolio)
+    && !("retireCandidates" in value.portfolio)
     && value.freshSessionCorrelation?.adoptionStatus === "not-assessed"
     && value.cost?.monetary?.status === "unavailable"
     && value.tools.every((tool) => tool?.correctnessStatus === "unknown"
@@ -41,7 +49,7 @@ function signalFor(row) {
   const measured = Number(row.measured);
   const errors = Number(row.errors);
   const calls = Number(row.calls);
-  if (measured >= 5 && errors / measured >= 0.2) return "fix-candidate";
+  if (measured >= 5 && errors / measured >= 0.2) return "high-observed-error-rate";
   if (calls >= 5) return "observed-use";
   return "insufficient-data";
 }
@@ -96,7 +104,7 @@ function deploymentBinding(toolName, deployment) {
   return null;
 }
 
-function sequenceCandidates(rows) {
+function repeatedToolSequences(rows) {
   const turns = new Map();
   for (const row of rows) {
     const key = `${row.provider}\0${row.session_hash}\0${row.turn_hash}`;
@@ -124,8 +132,9 @@ function sequenceCandidates(rows) {
       sequence: candidate.tools,
       observedTurns: candidate.turns,
       observedSessions: candidate.sessions.size,
-      signal: "candidate-for-procedure-evaluation",
-      correctnessStatus: "unknown"
+      signal: "repeated-tool-sequence",
+      correctnessStatus: "unknown",
+      interpretationStatus: "not-performed"
     }))
     .sort((left, right) => right.observedTurns - left.observedTurns
       || left.sequence.join("\0").localeCompare(right.sequence.join("\0")))
@@ -368,18 +377,19 @@ export function buildReport(database, options = {}, nowMs = Date.now()) {
         : "provider-reported-model-usage-record"
   }));
   const targets = observedSemanticToolNames(database);
-  const capabilityCandidates = tools
+  const repeatedUnmappedMcpUse = tools
     .filter((tool) => tool.routeClass === "mcp" && tool.calls >= 5
       && !hasSemanticTarget(tool.toolName, targets))
     .map((tool) => ({
       provider: tool.provider,
       toolName: tool.toolName,
       calls: tool.calls,
-      signal: "candidate-for-capability-contract",
+      signal: "repeated-unmapped-mcp-use",
       basis: "repeated-unmapped-mcp-use",
-      correctnessStatus: "unknown"
+      correctnessStatus: "unknown",
+      interpretationStatus: "not-performed"
     }));
-  const procedureCandidates = sequenceCandidates(
+  const repeatedSequences = repeatedToolSequences(
     toolSequenceEvents(database, cutoffMs, options.openAdamOnly === true)
   );
   const semanticExecutions = semanticExecutionReportRows(database, cutoffMs).map((row) => ({
@@ -513,16 +523,18 @@ export function buildReport(database, options = {}, nowMs = Date.now()) {
     },
     contextSurfaces,
     portfolio: {
-      fixCandidates: tools.filter((tool) => tool.signal === "fix-candidate").map((tool) => ({
+      highObservedErrorRates: tools.filter((tool) => tool.signal === "high-observed-error-rate").map((tool) => ({
         provider: tool.provider,
         toolName: tool.toolName,
-        basis: "runtime-error-signal"
+        measuredCalls: tool.runtime.measured,
+        errors: tool.runtime.errors,
+        errorRate: tool.runtime.errorRate,
+        basis: "minimum-measured-calls-and-observed-runtime-error-rate",
+        interpretationStatus: "not-performed"
       })),
-      capabilityCandidates,
-      procedureCandidates,
-      weakenRoutingCandidates: [],
-      retireCandidates: [],
-      claimBoundary: "Direct Runtime events record metadata about actual direct execution; imported Context Surface analyses measure explicit snapshots. Agent Host deployment observations declare one active immutable release. A matching tool name from a provider record whose observed session start is at or after activation is only a current-release correlation candidate, not causal attribution or proof of the catalog loaded by that host; pre-activation and unknown-start sessions remain separate. Fresh-session routing records are bounded metadata records, and their returned count is not a total when either bound is reached. None establishes correctness, adoption opportunity, natural routing, redundancy, retirement, exclusive call attribution, task quality, or authorization."
+      repeatedUnmappedMcpUse,
+      repeatedToolSequences: repeatedSequences,
+      claimBoundary: "Direct Runtime events record metadata about actual direct execution; imported Context Surface analyses measure explicit snapshots. Agent Host deployment observations declare one active immutable release. A matching tool name from a provider record whose observed session start is at or after activation is only a current-release correlation candidate, not causal attribution or proof of the catalog loaded by that host; pre-activation and unknown-start sessions remain separate. Fresh-session routing records are bounded metadata records, and their returned count is not a total when either bound is reached. Repeated use, repeated sequences, and high observed error rates are neutral observations. None establishes correctness, adoption opportunity, natural routing, semantic layer fit, repair need, redundancy, retirement, exclusive call attribution, task quality, authorization, or an action."
     },
     privacy: {
       rawContentStored: false,
@@ -554,12 +566,12 @@ export function renderReport(report) {
   if (report.tools.length === 0) lines.push("    0  —         No observations in this window");
   lines.push(
     "",
-    `Fix candidates: ${report.portfolio.fixCandidates.length}`,
+    `High observed error rates: ${report.portfolio.highObservedErrorRates.length}`,
     `Direct semantic execution groups: ${(report.semanticExecutions ?? []).length}; source=${report.directRuntime?.status ?? "not-collected"}`,
     `Static context snapshots: ${(report.contextSurfaces ?? []).length}; monetary cost=${report.cost?.monetary?.status ?? "unavailable"}`,
     `Current Agent Host deployment: ${report.currentAgentHostDeployment?.releaseId ?? "not observed"}`,
-    `Discovery candidates: ${(report.portfolio.capabilityCandidates ?? []).length} Capability contracts, ${(report.portfolio.procedureCandidates ?? []).length} Procedure evaluations`,
-    "Routing/retirement: insufficient data until opportunity and comparable-route observations exist.",
+    `Repeated patterns: ${(report.portfolio.repeatedUnmappedMcpUse ?? []).length} unmapped MCP tools, ${(report.portfolio.repeatedToolSequences ?? []).length} tool sequences`,
+    "Interpretation/action: not performed; routing, repair, standardization, and retirement remain external judgments.",
     "Privacy: metadata only, no source paths or raw content, no network, no model calls."
   );
   return `${lines.join("\n")}\n`;

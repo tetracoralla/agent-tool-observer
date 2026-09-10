@@ -158,8 +158,8 @@ should have used the tool.
 ## Report semantics
 
 The current JSON report is
-`openadam.agent-tool-observer.report.v0.5`. A snapshot without that exact
-version is stale input and is rebuilt from the current database. v0.5 uses
+`openadam.agent-tool-observer.report.v0.6`. A snapshot without that exact
+version is stale input and is rebuilt from the current database. v0.6 uses
 `correctnessStatus` and `opportunityStatus`; both remain `unknown` unless a
 separate current assessment owns the judgment. It removes the legacy
 receipt-derived `procedures` and `capabilities` projections; current semantic
@@ -168,27 +168,27 @@ execution observations come only from Direct Runtime metadata.
 The report emits these signals:
 
 - `observed-use`: repeated calls exist, without claiming correctness or value;
-- `fix-candidate`: enough measured calls exist and the observed runtime error rate is
-  materially high;
+- `high-observed-error-rate`: at least five measured calls exist and the
+  observed runtime error rate is at least 20%;
 - `insufficient-data`: the passive record cannot support a stronger claim.
 
-`weaken-routing` and `retire-candidate` are intentionally unavailable from
-passive metadata alone. A future opportunity classifier must first distinguish
-tool availability, genuine opportunity, forced routing, natural routing, and
-semantically comparable alternatives. Until then, the report recommends a
-targeted controlled evaluation rather than a portfolio mutation.
+The report has no repair, Capability, Procedure, routing, ranking, weakening,
+or retirement candidate fields. A user or user-selected Agent may use the
+measurements as one input to a separate assessment, but this Observer does not
+select that assessment or its next action.
 
-Two discovery signals are deliberately weaker than recommendations:
+Two repeated-pattern observations remain deliberately non-semantic:
 
 - repeated MCP calls with no observed semantic binding become
-  `candidate-for-capability-contract`;
+  `repeated-unmapped-mcp-use`;
 - an identical 2–8 non-derived MCP sequence repeated in at least three turns
   across at least two hashed sessions becomes
-  `candidate-for-procedure-evaluation`. Orchestration wrappers and statically
+  `repeated-tool-sequence`. Orchestration wrappers and statically
   derived nested names are excluded.
 
-Both retain `correctnessStatus: unknown`. They nominate definition and
-conformance work; they do not assert the observed sequence is the right method.
+Both retain `correctnessStatus: unknown` and
+`interpretationStatus: not-performed`. They do not nominate definition,
+conformance, repair, or productization work.
 
 ## Provider status
 
