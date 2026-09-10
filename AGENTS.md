@@ -1,8 +1,8 @@
 # Agent Tool Observer repository contract
 
-This checkout is a temporary legacy migration source. New source ownership is
-`../agent-host-suite/packages/agent-tool-observer`; preserve all current
-report-v0.6 work and do not create a parallel feature line here.
+Current source ownership is [agent-tool-observer in Agent Host](https://github.com/tetracoralla/agent-host-suite/tree/main/packages/agent-tool-observer).
+This repository retains historical source. Apply new implementation and release
+work in Agent Host; the contract below describes this retained implementation.
 
 Read `docs/PRODUCT_MODEL.md` and `docs/REVIEW_CONTRACT.md` before changing
 provider adapters, storage, automatic collection, privacy projection, or claim

@@ -1,9 +1,9 @@
 # Agent Tool Observer
 
-> **Migration status:** active source ownership is moving to
-> `agent-host-suite/packages/agent-tool-observer`. This checkout preserves the
-> current report-v0.6 work as a recoverable migration source; do not start a
-> separate product or release line here.
+> **Current source:** [agent-tool-observer in Agent Host](https://github.com/tetracoralla/agent-host-suite/tree/main/packages/agent-tool-observer).
+> Development, installation, and current integration documentation now belong to
+> Agent Host. This repository retains the earlier standalone source; the
+> instructions below describe that historical version.
 
 Agent Tool Observer is a private, local-only observer for the Agent clients on
 this Mac. It incrementally reads the structured records already written by
